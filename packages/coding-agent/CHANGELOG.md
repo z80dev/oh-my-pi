@@ -25,6 +25,19 @@
 - Fixed `/handoff` losing local artifacts (plans, scratch files, research notes) by copying them across the handoff session boundary.
 - Replaced libarchive-based tar parsing with a hardened, in-process tar reader to prevent crashes and safely handle complex archive structures, symlinks, and sparse metadata.
 - Fixed `Ctrl+O` tool-output expansion failing to reach launch-completion messages wrapped in the hidden tool activity container.
+### Breaking Changes
+
+- WATCHDOG.yml advisor rosters are no longer supported. Advisors are now defined as agent definitions: the main session lists them via the `advisor.agents` setting, and agents opt their subagents in via `advisors:` frontmatter.
+- Removed the `advisor.subagents` setting. Subagents get advisors only from their own definition's `advisors:` frontmatter.
+
+### Added
+
+- Advisors are now ordinary agent definitions referenced by name: `advisors:` agent frontmatter for subagents and the `advisor.agents` setting for the main session.
+- `/advisor configure` is now an agent picker over the discovered roster instead of a YAML editor.
+
+### Removed
+
+- WATCHDOG.yml roster configuration and its TUI YAML editor.
 
 ## [17.2.14] - 2026-08-11
 

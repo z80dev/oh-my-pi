@@ -730,7 +730,16 @@ describe("AgentSession retry delay cap", () => {
 			settings,
 			modelRegistry,
 			advisorTools: [],
-			advisorConfigs: [{ name: "cyber-policy", model: advisorSelector }],
+			advisorAgentNames: ["cyber-policy"],
+			advisorAgentRoster: [
+				{
+					name: "cyber-policy",
+					description: "Advisor pinned to the Codex model whose accounts deny on cyber policy",
+					systemPrompt: "",
+					model: [advisorSelector],
+					source: "user",
+				},
+			],
 			advisorStreamFn: (requestedModel, context, options) => {
 				requestedAdvisorModels.push(`${requestedModel.provider}/${requestedModel.id}`);
 				return aiStream.streamSimple(advisorMock.model, context, options);
