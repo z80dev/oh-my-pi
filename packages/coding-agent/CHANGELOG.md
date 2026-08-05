@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- WATCHDOG.yml advisor rosters are no longer supported. Advisors are now defined as agent definitions: the main session lists them via the `advisor.agents` setting, and agents opt their subagents in via `advisors:` frontmatter.
+- Removed the `advisor.subagents` setting. Subagents get advisors only from their own definition's `advisors:` frontmatter.
+
+### Added
+
+- Advisors are now ordinary agent definitions referenced by name: `advisors:` agent frontmatter for subagents and the `advisor.agents` setting for the main session.
+- `/advisor configure` is now an agent picker over the discovered roster instead of a YAML editor.
+
+### Removed
+
+- WATCHDOG.yml roster configuration and its TUI YAML editor.
+
 ## [17.2.9] - 2026-08-05
 
 ### Breaking Changes
