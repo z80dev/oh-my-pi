@@ -9,7 +9,7 @@ import { Settings } from "../../../src/config/settings";
 import { AdvisorAgentsPickerComponent } from "../../../src/modes/components/advisor-config";
 import { getThemeByName, setThemeInstance, type Theme } from "../../../src/modes/theme/theme";
 import { parseAgent } from "../../../src/task/agents";
-import type { AgentDefinition } from "../../../src/task/types";
+import type { AdvisorRoster, AgentDefinition } from "../../../src/task/types";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -55,7 +55,7 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
-function bundledAgent(name: string, description: string, advisors?: string[]): AgentDefinition {
+function bundledAgent(name: string, description: string, advisors?: AdvisorRoster): AgentDefinition {
 	return {
 		name,
 		description,
@@ -68,21 +68,22 @@ function bundledAgent(name: string, description: string, advisors?: string[]): A
 
 interface Harness {
 	picker: AdvisorAgentsPickerComponent;
-	saved: Array<{ enabled: boolean; agents: string[] }>;
+	saved: Array<{ enabled: boolean; agents: AdvisorRoster }>;
 	settings: Settings;
 	userAgentsDir: string;
 	closed: boolean;
 	/** Resolves with the selection the moment the component finishes saving. */
-	nextSave: () => Promise<{ enabled: boolean; agents: string[] }>;
+	nextSave: () => Promise<{ enabled: boolean; agents: AdvisorRoster }>;
 	frame: () => string;
 }
 
-async function createPicker(agents: AgentDefinition[]): Promise<Harness> {
+async function createPicker(agents: AgentDefinition[], configure?: (settings: Settings) => void): Promise<Harness> {
 	const userAgentsDir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "advisor-picker-")), "agents");
 	tempDirs.push(path.dirname(userAgentsDir));
 	const settings = Settings.isolated();
-	const saved: Array<{ enabled: boolean; agents: string[] }> = [];
-	let pending = Promise.withResolvers<{ enabled: boolean; agents: string[] }>();
+	configure?.(settings);
+	const saved: Array<{ enabled: boolean; agents: AdvisorRoster }> = [];
+	let pending = Promise.withResolvers<{ enabled: boolean; agents: AdvisorRoster }>();
 	const harness: Harness = {
 		picker: undefined as unknown as AdvisorAgentsPickerComponent,
 		saved,
@@ -170,8 +171,18 @@ describe("AdvisorAgentsPickerComponent", () => {
 		picker.handleInput(DOWN);
 		const rendered = frame();
 		expect(rendered).not.toContain("Built-in baseline advisor");
-		expect(rendered).not.toContain("default model:");
+		expect(rendered).not.toContain("model:");
 		expect(rendered).toContain("[ ] default");
+	});
+
+	it("shows a model row only for checked advisor entries", async () => {
+		const { picker, frame } = await createPicker([bundledAgent("scout", "Fast scout")]);
+		picker.handleInput(DOWN); // main session
+		expect(frame()).not.toContain("model: auto");
+
+		picker.handleInput(TAB);
+		picker.handleInput(ENTER); // check the built-in default advisor
+		expect(frame()).toContain("model: auto");
 	});
 
 	it("toggles the master switch on the left pane and the main roster on the right, then save persists settings", async () => {
@@ -186,8 +197,7 @@ describe("AdvisorAgentsPickerComponent", () => {
 		picker.handleInput(ENTER); // built-in default row (first on the right)
 		expect(frame()).toContain("● unsaved");
 
-		// Right rows: default, default model, scout, save, close — three downs
-		// land on Save.
+		// Right rows: default, model, scout, save, close — three downs land on Save.
 		picker.handleInput(DOWN);
 		picker.handleInput(DOWN);
 		picker.handleInput(DOWN);
@@ -197,9 +207,9 @@ describe("AdvisorAgentsPickerComponent", () => {
 		picker.handleInput(ENTER);
 		await savePromise;
 
-		expect(saved).toEqual([{ enabled: true, agents: ["default"] }]);
+		expect(saved).toEqual([{ enabled: true, agents: { default: null } }]);
 		expect(settings.get("advisor.enabled")).toBe(true);
-		expect(settings.get("advisor.agents")).toEqual(["default"]);
+		expect(settings.get("advisor.agents")).toEqual({ default: null });
 	});
 
 	it("persists a bundled agent's advisors by shadowing it into the user agents dir", async () => {
@@ -212,8 +222,7 @@ describe("AdvisorAgentsPickerComponent", () => {
 		picker.handleInput(DOWN);
 		picker.handleInput(TAB);
 		picker.handleInput(ENTER);
-		// Right rows: default, default model, scout, save, close — three downs
-		// land on Save.
+		// Right rows: default, model, scout, save, close — three downs land on Save.
 		picker.handleInput(DOWN);
 		picker.handleInput(DOWN);
 		picker.handleInput(DOWN);
@@ -223,32 +232,38 @@ describe("AdvisorAgentsPickerComponent", () => {
 
 		const shadowPath = path.join(userAgentsDir, "reviewer.md");
 		const shadow = parseAgent(shadowPath, await Bun.file(shadowPath).text(), "user");
-		expect(shadow.advisors).toEqual(["default"]);
+		expect(shadow.advisors).toEqual({ default: null });
 		expect(shadow.description).toBe("Code reviewer");
 		// The local definition now reflects the shadow so reopening shows it.
-		expect(reviewer.advisors).toEqual(["default"]);
+		expect(reviewer.advisors).toEqual({ default: null });
 		expect(reviewer.filePath).toBe(shadowPath);
 		expect(reviewer.source).toBe("user");
 	});
 
-	/** From the master-switch row: select the main session, focus the right pane, open the model row. */
+	/** From the master-switch row: select the main session, check the built-in default advisor, open its model row. */
 	function openDefaultModelPicker(picker: AdvisorAgentsPickerComponent): void {
 		picker.handleInput(DOWN); // default (main session)
 		picker.handleInput(TAB); // focus right pane
-		picker.handleInput(DOWN); // "default model:" row
+		picker.handleInput(ENTER); // check the default advisor row
+		picker.handleInput(DOWN); // "model:" row
 		picker.handleInput(ENTER);
 	}
 
 	it("opens a role-and-model picker for the default advisor and shows the current value", async () => {
-		const { picker, settings, frame } = await createPicker([bundledAgent("scout", "Fast scout")]);
+		const { picker, settings, frame } = await createPicker([bundledAgent("scout", "Fast scout")], s =>
+			s.set("advisor.agents", { default: "@slow" }),
+		);
 		settings.setModelRole("slow", "anthropic/claude-sonnet-4-5");
 
 		picker.handleInput(DOWN); // main session roster
-		expect(frame()).toContain("default model: auto");
+		expect(frame()).toContain("model: @slow");
 
-		openDefaultModelPicker(picker);
+		// Default is already checked: focus right and open its model row.
+		picker.handleInput(TAB);
+		picker.handleInput(DOWN);
+		picker.handleInput(ENTER);
 		const picking = frame();
-		expect(picking).toContain("default advisor model — current: auto");
+		expect(picking).toContain("default advisor model — current: @slow");
 		expect(picking).toContain("@slow");
 		expect(picking).toContain("gpt-5.4");
 	});
@@ -262,18 +277,20 @@ describe("AdvisorAgentsPickerComponent", () => {
 		for (const ch of "@slow") picker.handleInput(ch);
 		picker.handleInput(ENTER);
 
-		expect(frame()).toContain("default model: @slow");
+		expect(frame()).toContain("model: @slow");
 		expect(frame()).toContain("● unsaved");
 
-		// Right rows: default, default model, scout, save, close — cursor sits
-		// on the model row after exiting the picker; two downs land on Save.
+		// Right rows: default, model, scout, save, close — cursor sits on the
+		// model row after exiting the picker; two downs land on Save.
 		picker.handleInput(DOWN);
 		picker.handleInput(DOWN);
 		const savePromise = nextSave();
 		picker.handleInput(ENTER);
 		await savePromise;
 
-		expect(settings.getModelRole("advisor")).toBe("@slow");
+		// The override rides on the `default` roster entry, not the global role.
+		expect(settings.get("advisor.agents")).toEqual({ default: "@slow" });
+		expect(settings.getModelRole("advisor")).toBeUndefined();
 	});
 
 	it("assigns a concrete model to the default advisor and persists it on save", async () => {
@@ -283,7 +300,7 @@ describe("AdvisorAgentsPickerComponent", () => {
 		for (const ch of "gpt-5.4") picker.handleInput(ch);
 		picker.handleInput(ENTER);
 
-		expect(frame()).toContain("default model: openai/gpt-5.4");
+		expect(frame()).toContain("model: openai/gpt-5.4");
 		expect(frame()).toContain("● unsaved");
 
 		picker.handleInput(DOWN);
@@ -292,19 +309,23 @@ describe("AdvisorAgentsPickerComponent", () => {
 		picker.handleInput(ENTER);
 		await savePromise;
 
-		expect(settings.getModelRole("advisor")).toBe("openai/gpt-5.4");
+		expect(settings.get("advisor.agents")).toEqual({ default: "openai/gpt-5.4" });
 	});
 
 	it("clears a configured default advisor model back to auto", async () => {
-		const { picker, settings, frame, nextSave } = await createPicker([bundledAgent("scout", "Fast scout")]);
-		settings.setModelRole("slow", "anthropic/claude-sonnet-4-5");
-		settings.setModelRole("advisor", "@slow");
+		const { picker, settings, frame, nextSave } = await createPicker([bundledAgent("scout", "Fast scout")], s => {
+			s.setModelRole("slow", "anthropic/claude-sonnet-4-5");
+			s.set("advisor.agents", { default: "@slow" });
+		});
 
-		openDefaultModelPicker(picker);
+		picker.handleInput(DOWN); // main session
+		picker.handleInput(TAB);
+		picker.handleInput(DOWN); // model row (default already checked)
+		picker.handleInput(ENTER);
 		for (const ch of "auto") picker.handleInput(ch);
 		picker.handleInput(ENTER);
 
-		expect(frame()).toContain("default model: auto");
+		expect(frame()).toContain("model: auto");
 		expect(frame()).toContain("● unsaved");
 
 		picker.handleInput(DOWN);
@@ -313,14 +334,101 @@ describe("AdvisorAgentsPickerComponent", () => {
 		picker.handleInput(ENTER);
 		await savePromise;
 
-		expect(settings.getModelRole("advisor")).toBeUndefined();
+		expect(settings.get("advisor.agents")).toEqual({ default: null });
+	});
+
+	it("persists a named advisor's model override per driving agent, leaving the advisor's own definition alone", async () => {
+		const reviewer = bundledAgent("reviewer", "Code reviewer");
+		const librarian = bundledAgent("librarian", "Librarian", undefined);
+		librarian.model = ["anthropic/claude-sonnet-4-5"];
+		const { picker, settings, frame, userAgentsDir, nextSave } = await createPicker([
+			reviewer,
+			librarian,
+			bundledAgent("scout", "Fast scout"),
+		]);
+
+		// Select reviewer on the left (master, main, reviewer, librarian, scout
+		// → two downs), focus right, check the librarian row.
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN);
+		picker.handleInput(TAB);
+		picker.handleInput(DOWN); // librarian row
+		picker.handleInput(ENTER);
+		// Right rows: default, librarian, model, scout, save, close — one more
+		// down lands on the librarian model row.
+		picker.handleInput(DOWN);
+		picker.handleInput(ENTER);
+		for (const ch of "gpt-5.4") picker.handleInput(ch);
+		picker.handleInput(ENTER);
+
+		expect(frame()).toContain("model: openai/gpt-5.4");
+		expect(frame()).toContain("● unsaved");
+
+		// Right rows: default, librarian, model, scout, save, close — two
+		// downs from the model row land on Save.
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN);
+		const savePromise = nextSave();
+		picker.handleInput(ENTER);
+		await savePromise;
+
+		// The override persists on the driving agent's roster entry.
+		expect(reviewer.advisors).toEqual({ librarian: "openai/gpt-5.4" });
+		const shadowPath = path.join(userAgentsDir, "reviewer.md");
+		const shadow = parseAgent(shadowPath, await Bun.file(shadowPath).text(), "user");
+		expect(shadow.advisors).toEqual({ librarian: "openai/gpt-5.4" });
+		// The librarian definition itself is untouched, and the global roster is.
+		expect(librarian.model).toEqual(["anthropic/claude-sonnet-4-5"]);
+		expect(settings.get("advisor.agents")).toEqual({});
+	});
+
+	it("shows a per-agent default advisor model and clears it back to auto without touching the main session", async () => {
+		const reviewer = bundledAgent("reviewer", "Code reviewer", { default: "@slow" });
+		const { picker, settings, frame, userAgentsDir, nextSave } = await createPicker(
+			[reviewer, bundledAgent("scout", "Fast scout")],
+			s => s.set("advisor.agents", { default: "openai/gpt-5.4" }),
+		);
+
+		// Select reviewer on the left; its persisted default override shows.
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN);
+		expect(frame()).toContain("model: @slow");
+
+		picker.handleInput(TAB);
+		picker.handleInput(DOWN); // model row (default already checked)
+		picker.handleInput(ENTER);
+		for (const ch of "auto") picker.handleInput(ch);
+		picker.handleInput(ENTER);
+
+		expect(frame()).toContain("model: auto");
+		expect(frame()).toContain("● unsaved");
+
+		// Right rows: default, model, scout, save, close — two downs from the
+		// model row land on Save.
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN);
+		const savePromise = nextSave();
+		picker.handleInput(ENTER);
+		await savePromise;
+
+		expect(reviewer.advisors).toEqual({ default: null });
+		const shadowPath = path.join(userAgentsDir, "reviewer.md");
+		const shadow = parseAgent(shadowPath, await Bun.file(shadowPath).text(), "user");
+		expect(shadow.advisors).toEqual({ default: null });
+		// The main session's roster is untouched.
+		expect(settings.get("advisor.agents")).toEqual({ default: "openai/gpt-5.4" });
 	});
 
 	it("esc exits the model picker without staging changes", async () => {
-		const { picker, frame } = await createPicker([bundledAgent("scout", "Fast scout")]);
+		const { picker, frame } = await createPicker([bundledAgent("scout", "Fast scout")], s =>
+			s.set("advisor.agents", { default: "@slow" }),
+		);
 
-		openDefaultModelPicker(picker);
-		expect(frame()).toContain("default advisor model — current: auto");
+		picker.handleInput(DOWN); // main session
+		picker.handleInput(TAB);
+		picker.handleInput(DOWN); // model row (default already checked)
+		picker.handleInput(ENTER);
+		expect(frame()).toContain("default advisor model — current: @slow");
 
 		picker.handleInput(ESC);
 		expect(frame()).toContain("Save & apply");

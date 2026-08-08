@@ -1214,6 +1214,67 @@ describe("Settings", () => {
 			}
 		});
 
+		it("migrates a nested advisor.agents name list from the config file to a roster record", async () => {
+			await writeSettings({ advisor: { agents: ["librarian"] } });
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("advisor.agents")).toEqual({ librarian: null });
+			// The migrated record persists in the nested slot the resolver reads.
+			settings.set("display.showTokenUsage", true);
+			await settings.flush();
+			expect((await readSettings()).advisor).toEqual({ agents: { librarian: null } });
+		});
+
+		it("migrates a quoted-dotted advisor.agents name list from the config file", async () => {
+			await Bun.write(getConfigPath(), `"advisor.agents": [librarian, scout]\n`);
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("advisor.agents")).toEqual({ librarian: null, scout: null });
+		});
+
+		it("migrates a legacy advisor.agents list through isolated overrides", () => {
+			const settings = Settings.isolated({
+				"advisor.agents": ["librarian"],
+			} as Partial<Record<SettingPath, unknown>>);
+
+			expect(settings.get("advisor.agents")).toEqual({ librarian: null });
+		});
+
+		it("migrates a nested legacy advisor.agents list through isolated overrides", () => {
+			const settings = Settings.isolated({
+				advisor: { agents: ["librarian"] },
+			} as Partial<Record<SettingPath, unknown>>);
+
+			expect(settings.get("advisor.agents")).toEqual({ librarian: null });
+		});
+
+		it("migrates a legacy CSV advisor.agents string to a roster record", () => {
+			const settings = Settings.isolated({
+				"advisor.agents": "librarian, scout",
+			} as Partial<Record<SettingPath, unknown>>);
+
+			expect(settings.get("advisor.agents")).toEqual({ librarian: null, scout: null });
+		});
+
+		it("moves a quoted-dotted advisor.agents roster record into the nested slot", () => {
+			const settings = Settings.isolated({
+				"advisor.agents": { default: "@slow" },
+			} as Partial<Record<SettingPath, unknown>>);
+
+			expect(settings.get("advisor.agents")).toEqual({ default: "@slow" });
+		});
+
+		it("keeps an already-nested advisor.agents roster record and drops flat leftovers", () => {
+			const settings = Settings.isolated({
+				"advisor.agents": ["librarian"],
+				advisor: { agents: { default: "@slow" } },
+			} as Partial<Record<SettingPath, unknown>>);
+
+			expect(settings.get("advisor.agents")).toEqual({ default: "@slow" });
+		});
+
 		it("persists migrated consent/max keys and drops legacy nested parents on save", async () => {
 			await writeSettings({
 				dev: { autoqa: { consent: "denied" } },

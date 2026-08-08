@@ -270,9 +270,10 @@ export class SelectorController {
 			// `advisor.agents` on save, and edited agent frontmatter is written
 			// through the user agent dir (shadow copies for unwritable files).
 			const { agents } = await discoverAgents(cwd);
-			// The default advisor's model (and the empty-roster fallback label)
-			// are derived inside the picker from the `advisor` role; it only
-			// needs the available model list.
+			// The per-entry advisor models (and the empty-roster fallback label)
+			// are derived inside the picker from each entry's override, its
+			// definition `model`, or the `advisor` role; it only needs the
+			// available model list.
 			const userAgentsDir =
 				getConfigDirs("agents", { project: false }).find(entry => entry.source === ".omp")?.path ??
 				path.join(getAgentDir() ?? getProjectDir(), "agents");

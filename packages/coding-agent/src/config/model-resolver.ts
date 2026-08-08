@@ -29,6 +29,7 @@ import { fuzzyMatch } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
+import type { AgentDefinition } from "../task/types";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -1480,6 +1481,38 @@ export function resolveAdvisorRoleSelection(
 		matchPreferences: getModelMatchPreferences(settings),
 	});
 	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
+}
+
+/**
+ * Resolve one advisor roster entry's model for a driving agent.
+ *
+ * Precedence: the driving agent's override for that entry wins; else the
+ * advisor definition's own `model` patterns; else the global `advisor`
+ * role chain (the built-in default advisor has no definition, so it lands
+ * on the role chain). An explicit override or definition model that fails
+ * to resolve surfaces as no model rather than silently running the role.
+ */
+export function resolveAdvisorEntryModel(options: {
+	/** Driving override for this entry (`null`/undefined = none). */
+	override: string | null | undefined;
+	/** The advisor's own definition; undefined for the built-in default advisor. */
+	definition: AgentDefinition | undefined;
+	settings: Settings;
+	modelRegistry: ModelLookupRegistry;
+}): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel; explicitPatternLevel: boolean } | undefined {
+	const { override, definition, settings, modelRegistry } = options;
+	const patterns = override ? [override] : definition?.model;
+	if (patterns?.length) {
+		const resolved = resolveModelOverride(patterns, modelRegistry, settings);
+		if (!resolved.model) return undefined;
+		return {
+			model: resolved.model,
+			thinkingLevel: resolved.thinkingLevel,
+			explicitPatternLevel: resolved.explicitThinkingLevel,
+		};
+	}
+	const role = resolveAdvisorRoleSelection(settings, modelRegistry.getAvailable());
+	return role ? { model: role.model, thinkingLevel: role.thinkingLevel, explicitPatternLevel: false } : undefined;
 }
 
 /**

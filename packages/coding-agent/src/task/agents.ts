@@ -18,7 +18,7 @@ import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { t
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 import { AUTO_THINKING } from "../thinking";
 
-import type { AgentDefinition, AgentSource } from "./types";
+import type { AdvisorRoster, AgentDefinition, AgentSource } from "./types";
 
 interface AgentFrontmatter {
 	name: string;
@@ -126,15 +126,15 @@ export function parseAgent(
 	};
 }
 
-/** Build the frontmatter record for an agent definition with a fresh `advisors` list. */
-function buildAdvisorFrontmatterRecord(agent: AgentDefinition, advisors: string[]): Record<string, unknown> {
+/** Build the frontmatter record for an agent definition. */
+function buildAgentFrontmatterRecord(agent: AgentDefinition): Record<string, unknown> {
 	const record: Record<string, unknown> = {
 		name: agent.name,
 		description: agent.description,
 	};
 	if (agent.tools && agent.tools.length > 0) record.tools = agent.tools;
 	if (agent.spawns !== undefined) record.spawns = agent.spawns;
-	if (advisors.length > 0) record.advisors = advisors;
+	if (agent.advisors && Object.keys(agent.advisors).length > 0) record.advisors = agent.advisors;
 	if (agent.model && agent.model.length > 0) record.model = agent.model;
 	if (agent.thinkingLevel !== undefined) record.thinkingLevel = agent.thinkingLevel;
 	if (agent.output !== undefined) record.output = agent.output;
@@ -162,20 +162,31 @@ function parseRawFrontmatterRecord(block: string, raw: string): Record<string, u
 }
 
 /**
- * Rewrite only the `advisors` key of a raw agent file's frontmatter, splicing
+ * Patch for one agent file's frontmatter: an `undefined` field leaves the
+ * key untouched; a `null` (or empty) `advisors` roster clears the key.
+ */
+export interface AgentFrontmatterPatch {
+	/** New `advisors` roster (name → optional model override); `null` clears the key. */
+	advisors?: AdvisorRoster | null;
+}
+
+/** Apply a patch to a frontmatter record. */
+function applyFrontmatterPatch(record: Record<string, unknown>, patch: AgentFrontmatterPatch): void {
+	if (patch.advisors !== undefined) {
+		if (patch.advisors !== null && Object.keys(patch.advisors).length > 0) record.advisors = patch.advisors;
+		else delete record.advisors;
+	}
+}
+
+/**
+ * Rewrite only the patched keys of a raw agent file's frontmatter, splicing
  * the raw block so the body and all unrelated keys survive unchanged.
  */
-function updateAdvisorsFrontmatter(raw: string, advisors: string[], agent: AgentDefinition): string {
+function updateAgentFrontmatter(raw: string, patch: AgentFrontmatterPatch, agent: AgentDefinition): string {
 	const endIndex = raw.startsWith("---") ? raw.indexOf("\n---", 3) : -1;
 	const record =
-		endIndex !== -1
-			? parseRawFrontmatterRecord(raw.slice(4, endIndex), raw)
-			: buildAdvisorFrontmatterRecord(agent, advisors);
-	if (advisors.length > 0) {
-		record.advisors = advisors;
-	} else {
-		delete record.advisors;
-	}
+		endIndex !== -1 ? parseRawFrontmatterRecord(raw.slice(4, endIndex), raw) : buildAgentFrontmatterRecord(agent);
+	applyFrontmatterPatch(record, patch);
 	const yaml = YAML.stringify(record, null, 2).trimEnd();
 	if (endIndex !== -1) {
 		return `---\n${yaml}${raw.slice(endIndex)}`;
@@ -183,9 +194,10 @@ function updateAdvisorsFrontmatter(raw: string, advisors: string[], agent: Agent
 	return `---\n${yaml}\n---\n\n${raw}`;
 }
 
-/** Rebuild a full agent file from a definition, replacing the frontmatter's `advisors`. */
-function serializeAgentWithAdvisors(agent: AgentDefinition, advisors: string[]): string {
-	const record = buildAdvisorFrontmatterRecord(agent, advisors);
+/** Rebuild a full agent file from a definition, replacing the patched frontmatter keys. */
+function serializeAgentWithPatch(agent: AgentDefinition, patch: AgentFrontmatterPatch): string {
+	const record = buildAgentFrontmatterRecord(agent);
+	applyFrontmatterPatch(record, patch);
 	const yaml = YAML.stringify(record, null, 2).trimEnd();
 	return `---\n${yaml}\n---\n\n${agent.systemPrompt.trimEnd()}\n`;
 }
@@ -200,7 +212,7 @@ function isAgentFileWritableInPlace(filePath: string, userAgentsDir: string): bo
 }
 
 /**
- * Persist an agent definition's `advisors` frontmatter list.
+ * Persist patched keys of an agent definition's frontmatter.
  *
  * Real agent files are edited in place when they live in the user agents dir
  * or any project `.omp/agents` dir. Files anywhere else (plugins, extensions)
@@ -208,21 +220,21 @@ function isAgentFileWritableInPlace(filePath: string, userAgentsDir: string): bo
  * `userAgentsDir`, so the edit sticks and discovery precedence keeps the
  * shadowed file winning.
  */
-export async function writeAgentAdvisors(
+export async function writeAgentFrontmatter(
 	agent: AgentDefinition,
-	advisors: string[],
+	patch: AgentFrontmatterPatch,
 	userAgentsDir: string,
 ): Promise<{ filePath: string; shadowed: boolean }> {
 	const filePath = agent.filePath;
 	if (filePath !== undefined && !filePath.startsWith("embedded:")) {
 		const inPlace = isAgentFileWritableInPlace(filePath, userAgentsDir);
 		const target = inPlace ? filePath : path.join(userAgentsDir, `${agent.name}.md`);
-		const content = updateAdvisorsFrontmatter(await Bun.file(filePath).text(), advisors, agent);
+		const content = updateAgentFrontmatter(await Bun.file(filePath).text(), patch, agent);
 		await Bun.write(target, content);
 		return { filePath: target, shadowed: target !== filePath };
 	}
 	const target = path.join(userAgentsDir, `${agent.name}.md`);
-	await Bun.write(target, serializeAgentWithAdvisors(agent, advisors));
+	await Bun.write(target, serializeAgentWithPatch(agent, patch));
 	return { filePath: target, shadowed: target !== filePath };
 }
 

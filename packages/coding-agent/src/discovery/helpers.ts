@@ -8,6 +8,7 @@ import {
 	getConfigDirName,
 	getPluginsDir,
 	getProjectDir,
+	isRecord,
 	parseFrontmatter,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
@@ -17,6 +18,7 @@ import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../
 import type { Skill, SkillFrontmatter } from "../capability/skill";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
 import type { MCPRequestIdFormat } from "../mcp/types";
+import type { AdvisorRoster } from "../task/types";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames } from "../tools/builtin-names";
 
@@ -178,6 +180,43 @@ export function parseArrayOrCSV(value: unknown): string[] | undefined {
 }
 
 /**
+ * Parse an advisor roster: a map of `name → model override` (`null` = no
+ * override), a list of plain names, a list mixing plain names with
+ * single-key `{ name: selector }` override objects, or a CSV string of
+ * plain names. Returns undefined when no entries survive.
+ */
+export function parseAdvisorRoster(value: unknown): AdvisorRoster | undefined {
+	if (isRecord(value)) {
+		const roster: AdvisorRoster = {};
+		for (const [name, model] of Object.entries(value)) {
+			if (!name.trim()) continue;
+			roster[name] = typeof model === "string" && model.trim() ? model.trim() : null;
+		}
+		return Object.keys(roster).length > 0 ? roster : undefined;
+	}
+	if (Array.isArray(value)) {
+		const roster: AdvisorRoster = {};
+		for (const entry of value) {
+			if (typeof entry === "string") {
+				const name = entry.trim();
+				if (name) roster[name] = null;
+			} else if (isRecord(entry)) {
+				for (const [name, model] of Object.entries(entry)) {
+					if (!name.trim()) continue;
+					roster[name] = typeof model === "string" && model.trim() ? model.trim() : null;
+				}
+			}
+		}
+		return Object.keys(roster).length > 0 ? roster : undefined;
+	}
+	const names = parseArrayOrCSV(value);
+	if (!names) return undefined;
+	const roster: AdvisorRoster = {};
+	for (const name of names) roster[name] = null;
+	return roster;
+}
+
+/**
  * Build a canonical rule item from a markdown/markdown-frontmatter document.
  */
 export function buildRuleFromMarkdown(
@@ -237,7 +276,7 @@ export interface ParsedAgentFields {
 	description: string;
 	tools?: string[];
 	spawns?: string[] | "*";
-	advisors?: string[];
+	advisors?: AdvisorRoster;
 	model?: string[];
 	output?: unknown;
 	thinkingLevel?: ConfiguredThinkingLevel;
@@ -288,9 +327,10 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		spawns = "*";
 	}
 
-	// Advisors: name references into the same discovery roster, resolved when
-	// the session for this agent is built.
-	const advisors = parseArrayOrCSV(frontmatter.advisors);
+	// Advisors: roster entries (name → optional model override) resolved
+	// against the same discovery roster when the session for this agent is
+	// built.
+	const advisors = parseAdvisorRoster(frontmatter.advisors);
 
 	const output = frontmatter.output !== undefined ? frontmatter.output : undefined;
 	const rawThinkingLevel =
