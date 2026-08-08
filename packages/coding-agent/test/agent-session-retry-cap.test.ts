@@ -730,7 +730,7 @@ describe("AgentSession retry delay cap", () => {
 			settings,
 			modelRegistry,
 			advisorTools: [],
-			advisorAgentNames: ["cyber-policy"],
+			advisorRoster: { "cyber-policy": null },
 			advisorAgentRoster: [
 				{
 					name: "cyber-policy",

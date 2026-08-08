@@ -390,7 +390,7 @@ describe("AgentSession advisor toggle", () => {
 		const advisor = enableAdvisor();
 		appendAdvisorCost(advisor, 0.5, 1);
 
-		expect(session.applyAdvisorAgents(["Security"])).toBe(1);
+		expect(session.applyAdvisorAgents({ Security: null })).toBe(1);
 		expect(session.getAdvisorCost()).toBeCloseTo(0.5, 8);
 		expect(session.formatAdvisorStatus()).toContain("$0.5000");
 	});

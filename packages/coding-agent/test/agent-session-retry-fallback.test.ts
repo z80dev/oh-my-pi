@@ -1337,7 +1337,7 @@ describe("AgentSession retry fallback", () => {
 			settings,
 			modelRegistry,
 			advisorTools: [],
-			advisorAgentNames: ["fallback-test"],
+			advisorRoster: { "fallback-test": null },
 			advisorAgentRoster: [
 				{
 					name: "fallback-test",

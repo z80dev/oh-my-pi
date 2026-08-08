@@ -29,12 +29,15 @@
 
 - WATCHDOG.yml advisor rosters are no longer supported. Advisors are now defined as agent definitions: the main session lists them via the `advisor.agents` setting, and agents opt their subagents in via `advisors:` frontmatter.
 - Removed the `advisor.subagents` setting. Subagents get advisors only from their own definition's `advisors:` frontmatter.
+- Renamed `writeAgentAdvisors` to `writeAgentFrontmatter` in `@oh-my-pi/pi-coding-agent/task/agents`; the new signature takes a patch object (`{ advisors? }`) so one write can persist multiple keys.
+- `advisor.agents` (setting) and agent `advisors:` frontmatter are now roster records — `name → model override` (values `null` = no override) — instead of plain name lists. Legacy name lists/CSV still parse (entries without overrides) and migrate automatically on settings load.
 
 ### Added
 
 - Advisors are now ordinary agent definitions referenced by name: `advisors:` agent frontmatter for subagents and the `advisor.agents` setting for the main session.
 - The reserved advisor name `default` explicitly attaches the built-in default advisor (baseline prompt, `advisor`-role model, read-only tools) from `advisor.agents` or a definition's `advisors:` frontmatter, including alongside other advisors and for subagents.
 - `/advisor configure` can now set the built-in default advisor's model: a `default model` row in the right pane opens a searchable picker offering the built-in roles (`@fast`, `@slow`, …), any custom role, and the full model catalog, persisted to `modelRoles.advisor` (an `auto` row clears the assignment).
+- The built-in default advisor's model is now per driving agent: `/advisor configure` shows a `model` row under every checked advisor entry, and the built-in `default` entry's pick persists per driving agent (`advisor.agents` for the main session, `advisors:` frontmatter for an agent definition) — so setting the task agent's default advisor model no longer changes the main session's. Named advisors can also be overridden per driving agent; unset entries keep the advisor's own `model` or the `advisor` role.
 
 ### Changed
 

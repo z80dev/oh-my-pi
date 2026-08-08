@@ -17,6 +17,12 @@
  * writes changed agent `advisors:` frontmatter (shadow-copying into the user
  * agent dir when the original file isn't writable), and rebuilds the live
  * advisors via the host `save` callback.
+ *
+ * Each checked advisor entry gains a `model` row that overrides that entry's
+ * model for this driving agent only — the built-in default advisor included,
+ * so its model is set per driving agent (persisted into the `default` roster
+ * entry, never a global setting). Named advisors keep their own definition's
+ * model unless overridden here.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import {
@@ -28,12 +34,12 @@ import {
 	type SgrMouseEvent,
 	truncateToWidth,
 } from "@oh-my-pi/pi-tui";
-import { resolveAdvisorRoleSelection } from "../../config/model-resolver";
+import { resolveAdvisorEntryModel } from "../../config/model-resolver";
 import { DEFAULT_MODEL_ROLE_ALIAS, formatModelRoleAlias, getKnownRoleIds } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
 import type { PerAdvisorStat } from "../../session/agent-session";
-import { writeAgentAdvisors } from "../../task/agents";
-import type { AgentDefinition, AgentSource } from "../../task/types";
+import { writeAgentFrontmatter } from "../../task/agents";
+import type { AdvisorRoster, AgentDefinition, AgentSource } from "../../task/types";
 import { getSelectListTheme, theme } from "../theme/theme";
 import {
 	buildBrowserItems,
@@ -48,7 +54,7 @@ import { resolveSegmentPalette } from "./segment-track";
 /** Host callbacks: live-runtime effects (and the status line) flow through these. */
 export interface AdvisorAgentsPickerCallbacks {
 	/** Persist the master switch + main-session roster and rebuild the live advisors. */
-	save: (selection: { enabled: boolean; agents: string[] }) => Promise<void> | void;
+	save: (selection: { enabled: boolean; agents: AdvisorRoster }) => Promise<void> | void;
 	/** Tear down the overlay and restore the editor. */
 	close: () => void;
 	requestRender: () => void;
@@ -62,7 +68,7 @@ export interface AdvisorAgentsPickerDeps {
 	settings: Settings;
 	/** The discovered agent roster; displayed (and persisted) in discovery order. */
 	agents: readonly AgentDefinition[];
-	/** Models available to the `advisor` role; drive the default-advisor model picker. */
+	/** Models available to advisors; drive the per-entry model pickers. */
 	availableModels: Model<Api>[];
 	/** User agent dir; edited agent files are shadow-copied here when unwritable. */
 	userAgentsDir: string;
@@ -79,11 +85,11 @@ const DEFAULT_ADVISOR_NAME = "default";
 /** Driving-agent key of the main session in the left pane. */
 const MAIN_KEY = "__main";
 const ENABLED_ACTION = "__enabled";
-/** Right-pane action row: change the built-in default advisor's model. */
-const MODEL_ACTION = "__defaultModel";
+/** Prefix of right-pane model-override rows; the full value encodes the advisor name. */
+const MODEL_ACTION_PREFIX = "__model:";
 const SAVE_ACTION = "__save";
 const CLOSE_ACTION = "__close";
-/** Virtual picker row that clears `modelRoles.advisor` back to auto-selection. */
+/** Virtual picker row that clears an entry's override back to auto-selection. */
 const ADVISOR_AUTO_SELECTOR = "auto";
 
 const PREVIEW_WIDTH = 60;
@@ -93,6 +99,20 @@ function previewLine(text: string | undefined): string {
 	if (!text?.trim()) return "";
 	const first = text.trim().split("\n", 1)[0] ?? "";
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
+}
+
+/**
+ * Convert a persisted roster record into a working map, dropping names that
+ * are no longer known so save writes a self-healing list.
+ */
+function rosterMap(roster: AdvisorRoster | undefined, known: (name: string) => boolean): Map<string, string | null> {
+	const map = new Map<string, string | null>();
+	if (!roster) return map;
+	for (const [name, override] of Object.entries(roster)) {
+		if (!known(name)) continue;
+		map.set(name, typeof override === "string" && override.trim() ? override.trim() : null);
+	}
+	return map;
 }
 
 /**
@@ -113,16 +133,20 @@ export class AdvisorAgentsPickerComponent implements Component {
 	#masterEnabled: boolean;
 	/** Left-pane cursor sits on the master-switch row: the right pane renders empty. */
 	#masterSelected: boolean;
-	/** Advisors per driving agent, keyed by `"__main"` or the agent name. */
-	#rosters: Map<string, Set<string>>;
+	/**
+	 * Advisors per driving agent, keyed by `"__main"` or the agent name:
+	 * advisor name → model override (`null` = no override, the advisor's own
+	 * model applies). A key's presence is roster membership.
+	 */
+	#rosters: Map<string, Map<string, string | null>>;
 	/** Agent names whose `advisors` frontmatter changed and needs a write on save. */
 	#dirtyAgents: Set<string>;
 	/** Master-switch/main-roster changes are unsaved (drives the title marker). */
 	#dirtyMain = false;
-	/** True while the right pane picks the built-in default advisor's model. */
+	/** True while the right pane picks a roster entry's model. */
 	#advisorModelMode = false;
-	/** Pending `modelRoles.advisor` value: a selector, `null` (clear to auto), or `undefined` (untouched). */
-	#stagedAdvisorModel: string | null | undefined;
+	/** The roster entry whose model is being picked. */
+	#advisorModelTarget: string | undefined;
 	/** The model browser shown while {@link #advisorModelMode} is active. */
 	#advisorBrowser: ModelBrowser;
 
@@ -160,9 +184,9 @@ export class AdvisorAgentsPickerComponent implements Component {
 		// that are no longer known ("default" or a discovered agent) are dropped
 		// so save writes a self-healing list.
 		const known = (name: string): boolean => name === DEFAULT_ADVISOR_NAME || this.#agentByName.has(name);
-		this.#rosters = new Map([[MAIN_KEY, new Set(this.#settings.get("advisor.agents").filter(known))]]);
+		this.#rosters = new Map([[MAIN_KEY, rosterMap(this.#settings.get("advisor.agents"), known)]]);
 		for (const agent of this.#agents) {
-			this.#rosters.set(agent.name, new Set((agent.advisors ?? []).filter(known)));
+			this.#rosters.set(agent.name, rosterMap(agent.advisors, known));
 		}
 		this.#dirtyAgents = new Set();
 		this.#leftList = this.#buildLeft();
@@ -267,25 +291,26 @@ export class AdvisorAgentsPickerComponent implements Component {
 		this.#cb.requestRender();
 	}
 
-	#currentRoster(): Set<string> {
+	#currentRoster(): Map<string, string | null> {
 		let roster = this.#rosters.get(this.#selectedDriving);
 		if (!roster) {
-			roster = new Set();
+			roster = new Map();
 			this.#rosters.set(this.#selectedDriving, roster);
 		}
 		return roster;
 	}
 
-	/** `"default"` first if selected, then agent names in discovery order (self excluded). */
-	#orderedRoster(key: string): string[] {
-		const set = this.#rosters.get(key) ?? new Set<string>();
-		const names: string[] = [];
-		if (set.has(DEFAULT_ADVISOR_NAME)) names.push(DEFAULT_ADVISOR_NAME);
+	/** The persisted roster record for one driving agent, `"default"` first then discovery order. */
+	#rosterRecord(key: string): AdvisorRoster {
+		const map = this.#rosters.get(key);
+		if (!map) return {};
+		const record: AdvisorRoster = {};
+		if (map.has(DEFAULT_ADVISOR_NAME)) record[DEFAULT_ADVISOR_NAME] = map.get(DEFAULT_ADVISOR_NAME) ?? null;
 		for (const agent of this.#agents) {
-			if (agent.name === key || agent.name === DEFAULT_ADVISOR_NAME) continue;
-			if (set.has(agent.name)) names.push(agent.name);
+			if (!map.has(agent.name)) continue;
+			record[agent.name] = map.get(agent.name) ?? null;
 		}
-		return names;
+		return record;
 	}
 
 	#footerHint(): string {
@@ -307,7 +332,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 			this.#currentRoster().size === 0 &&
 			this.#masterEnabled
 		) {
-			const model = this.#resolvedAdvisorModel();
+			const model = this.#resolvedAdvisorModel(DEFAULT_ADVISOR_NAME);
 			const label = model ? ` (${model.provider}/${model.id})` : "";
 			return `${base} · empty roster → built-in default advisor${label}`;
 		}
@@ -388,6 +413,28 @@ export class AdvisorAgentsPickerComponent implements Component {
 		return list;
 	}
 
+	/** One checkbox row for an advisor entry, plus its model-override row when checked. */
+	#entryItems(roster: Map<string, string | null>, name: string, label: string, description: string): SelectItem[] {
+		const items: SelectItem[] = [
+			{
+				value: name,
+				label: `${roster.has(name) ? "[x]" : "[ ]"} ${label}`,
+				description,
+			},
+		];
+		if (roster.has(name)) {
+			items.push({
+				value: `${MODEL_ACTION_PREFIX}${name}`,
+				label: `model: ${theme.fg("dim", this.#advisorModelDisplay(name))}`,
+				description:
+					name === DEFAULT_ADVISOR_NAME
+						? "Enter to pick a role or model for the built-in default advisor (auto = the advisor role)"
+						: "Enter to override this advisor's model for this agent (auto = its own definition model)",
+			});
+		}
+		return items;
+	}
+
 	#rightItems(): SelectItem[] {
 		const roster = this.#currentRoster();
 		const drivingName =
@@ -395,32 +442,27 @@ export class AdvisorAgentsPickerComponent implements Component {
 		const items: SelectItem[] = [];
 		// A real agent definition named "default" wins over the built-in at
 		// runtime; its own row below represents that name, so the built-in row
-		// (and the shared default-advisor model row) is omitted in that case.
+		// is omitted in that case.
 		if (!this.#agentByName.has(DEFAULT_ADVISOR_NAME)) {
-			const model = this.#resolvedAdvisorModel();
-			items.push({
-				value: DEFAULT_ADVISOR_NAME,
-				label: `${roster.has(DEFAULT_ADVISOR_NAME) ? "[x]" : "[ ]"} default`,
-				description: `Built-in baseline advisor · model: ${
-					model ? `${model.provider}/${model.id}` : "auto (slow chain)"
-				} · tools: read, grep, glob`,
-			});
-			items.push({
-				value: MODEL_ACTION,
-				label: `default model: ${theme.fg("dim", this.#advisorModelDisplay())}`,
-				description: "Enter to pick a role or model for the built-in default advisor",
-			});
+			items.push(
+				...this.#entryItems(
+					roster,
+					DEFAULT_ADVISOR_NAME,
+					"default",
+					`Built-in baseline advisor · model: ${this.#entryModelLabel(DEFAULT_ADVISOR_NAME)} · tools: read, grep, glob`,
+				),
+			);
 		}
 		for (const agent of this.#agents) {
 			if (agent.name === drivingName) continue;
-			items.push({
-				value: agent.name,
-				label: `${roster.has(agent.name) ? "[x]" : "[ ]"} ${agent.name} ${theme.fg(
-					"dim",
-					`[${SOURCE_LABEL[agent.source]}]`,
-				)}`,
-				description: previewLine(agent.description),
-			});
+			items.push(
+				...this.#entryItems(
+					roster,
+					agent.name,
+					`${agent.name} ${theme.fg("dim", `[${SOURCE_LABEL[agent.source]}]`)}`,
+					previewLine(agent.description),
+				),
+			);
 		}
 		items.push({ value: SAVE_ACTION, label: "Save & apply" });
 		items.push({ value: CLOSE_ACTION, label: "Close" });
@@ -436,45 +478,66 @@ export class AdvisorAgentsPickerComponent implements Component {
 			this.#cb.close();
 			return;
 		}
-		if (value === MODEL_ACTION) {
-			this.#enterAdvisorModelMode();
+		if (value.startsWith(MODEL_ACTION_PREFIX)) {
+			this.#enterAdvisorModelMode(value.slice(MODEL_ACTION_PREFIX.length));
 			return;
 		}
 		const roster = this.#currentRoster();
 		if (roster.has(value)) roster.delete(value);
-		else roster.add(value);
+		else roster.set(value, null);
 		if (this.#selectedDriving === MAIN_KEY) this.#dirtyMain = true;
 		else this.#dirtyAgents.add(this.#selectedDriving);
 		this.#rightList = this.#buildRight();
 		this.#cb.requestRender();
 	}
 
-	// ───────────────────── default advisor model picker ─────────────────────
+	// ───────────────────── per-entry model picker ─────────────────────
 
-	/** The currently effective model for the `advisor` role, or undefined when unassigned. */
-	#resolvedAdvisorModel(): Model<Api> | undefined {
-		return resolveAdvisorRoleSelection(this.#settings, this.#availableModels)?.model;
+	/** The override for one advisor entry of the selected driving agent, or undefined when not in the roster. */
+	#advisorOverride(advisor: string): string | null | undefined {
+		return this.#currentRoster().get(advisor);
 	}
 
-	/** Value shown on the model row: staged selection, configured value, or `auto`. */
-	#advisorModelDisplay(): string {
-		const staged = this.#stagedAdvisorModel;
-		if (staged !== undefined) return staged === null ? "auto" : staged;
-		const configured = this.#settings.getModelRole("advisor");
-		if (configured) return configured === DEFAULT_MODEL_ROLE_ALIAS ? formatModelRoleAlias("default") : configured;
-		return "auto";
+	/**
+	 * The currently effective model for one advisor entry: the driving
+	 * agent's override wins; else the advisor definition's own `model`;
+	 * else the `advisor` role chain.
+	 */
+	#resolvedAdvisorModel(advisor: string): Model<Api> | undefined {
+		return resolveAdvisorEntryModel({
+			override: this.#advisorOverride(advisor),
+			definition: this.#agentByName.get(advisor),
+			settings: this.#settings,
+			modelRegistry: { getAvailable: () => this.#availableModels },
+		})?.model;
 	}
 
-	/** Selector to mark/preselect in the picker: staged value, configured value, or the auto row. */
-	#advisorCurrentSelector(): string {
-		const staged = this.#stagedAdvisorModel;
-		if (staged !== undefined) return staged === null ? ADVISOR_AUTO_SELECTOR : staged;
-		const configured = this.#settings.getModelRole("advisor");
-		if (configured) return configured === DEFAULT_MODEL_ROLE_ALIAS ? formatModelRoleAlias("default") : configured;
-		return ADVISOR_AUTO_SELECTOR;
+	/** Description label for one entry's effective model. */
+	#entryModelLabel(advisor: string): string {
+		const model = this.#resolvedAdvisorModel(advisor);
+		if (model) return `${model.provider}/${model.id}`;
+		const override = this.#advisorOverride(advisor);
+		if (override) return "no match";
+		if (advisor === DEFAULT_ADVISOR_NAME) return "auto (slow chain)";
+		return this.#agentByName.get(advisor)?.model?.length ? "no match" : "auto (own model)";
 	}
 
-	#enterAdvisorModelMode(): void {
+	/** Value shown on an entry's model row: its override, or `auto`. */
+	#advisorModelDisplay(advisor: string): string {
+		const override = this.#advisorOverride(advisor);
+		if (!override) return "auto";
+		return override === DEFAULT_MODEL_ROLE_ALIAS ? formatModelRoleAlias("default") : override;
+	}
+
+	/** Selector to mark/preselect in the picker: the entry's override, or the auto row. */
+	#advisorCurrentSelector(advisor: string): string {
+		const override = this.#advisorOverride(advisor);
+		if (!override) return ADVISOR_AUTO_SELECTOR;
+		return override === DEFAULT_MODEL_ROLE_ALIAS ? formatModelRoleAlias("default") : override;
+	}
+
+	#enterAdvisorModelMode(advisor: string): void {
+		this.#advisorModelTarget = advisor;
 		this.#advisorModelMode = true;
 		this.#focus = "right";
 		this.#refreshAdvisorModelBrowser();
@@ -483,21 +546,30 @@ export class AdvisorAgentsPickerComponent implements Component {
 
 	#exitAdvisorModelMode(): void {
 		this.#advisorModelMode = false;
+		this.#advisorModelTarget = undefined;
 		this.#rightList = this.#buildRight();
 		this.#cb.requestRender();
 	}
 
 	/** Rebuild the picker rows: auto, one row per resolvable role, then the model catalog. */
 	#refreshAdvisorModelBrowser(): void {
+		const target = this.#advisorModelTarget ?? DEFAULT_ADVISOR_NAME;
 		const assignments = resolveRoleAssignments(this.#settings, this.#availableModels, this.#availableModels);
 		const roleNames = getKnownRoleIds(this.#settings).filter(role => role !== "advisor");
 		const palette = resolveSegmentPalette(roleNames.length);
 		const items: ModelBrowserItem[] = [];
-		// The auto row carries the unassigned resolution so its detail line
-		// shows what will actually run; without a resolvable model it is omitted.
-		const autoModel = this.#resolvedAdvisorModel();
+		// The auto row carries the entry's own resolution (its definition
+		// `model`, or the `advisor` role for the built-in default) so its
+		// detail line shows what runs once the override is cleared. Without
+		// a resolvable model it is omitted.
+		const autoModel = resolveAdvisorEntryModel({
+			override: null,
+			definition: this.#agentByName.get(target),
+			settings: this.#settings,
+			modelRegistry: { getAvailable: () => this.#availableModels },
+		});
 		if (autoModel) {
-			items.push({ provider: "", id: "auto", model: autoModel, selector: ADVISOR_AUTO_SELECTOR });
+			items.push({ provider: "", id: "auto", model: autoModel.model, selector: ADVISOR_AUTO_SELECTOR });
 		}
 		roleNames.forEach((role, index) => {
 			const assignment = assignments[role];
@@ -519,30 +591,41 @@ export class AdvisorAgentsPickerComponent implements Component {
 		this.#advisorBrowser.setMruOrder(storage?.getModelUsageOrder() ?? []);
 		this.#advisorBrowser.setPerfStats(storage?.getModelPerf() ?? new Map());
 		this.#advisorBrowser.setItems(items);
-		this.#advisorBrowser.setCurrentSelector(this.#advisorCurrentSelector());
-		this.#advisorBrowser.selectSelector(this.#advisorCurrentSelector());
+		this.#advisorBrowser.setCurrentSelector(this.#advisorCurrentSelector(target));
+		this.#advisorBrowser.selectSelector(this.#advisorCurrentSelector(target));
 	}
 
-	/** Stage a picked role/model (or the auto row) and return to the roster. */
+	/** Stage a picked role/model (or the auto row) as the target entry's override and return to the roster. */
 	#onAdvisorModelPicked(item: ModelBrowserItem): void {
+		const target = this.#advisorModelTarget;
+		if (!target) {
+			this.#exitAdvisorModelMode();
+			return;
+		}
 		const value = item.selector === ADVISOR_AUTO_SELECTOR ? null : item.selector;
-		const current = this.#settings.getModelRole("advisor");
+		const current = this.#currentRoster().get(target) ?? null;
 		// `*` (DEFAULT_MODEL_ROLE_ALIAS) is shorthand for `@default`; treat them
 		// as equal so re-picking the effective value stays a no-op.
-		const normalize = (v: string | null | undefined): string | null | undefined =>
+		const normalize = (v: string | null): string | null =>
 			v === DEFAULT_MODEL_ROLE_ALIAS ? formatModelRoleAlias("default") : v;
 		if (normalize(value) !== normalize(current)) {
-			this.#stagedAdvisorModel = value;
-			this.#dirtyMain = true;
+			this.#currentRoster().set(target, value);
+			if (this.#selectedDriving === MAIN_KEY) this.#dirtyMain = true;
+			else this.#dirtyAgents.add(this.#selectedDriving);
 		}
 		this.#exitAdvisorModelMode();
 	}
 
-	/** Model-mode body: a dim header naming the current value, then the browser. */
+	/** Model-mode body: a dim header naming the target entry and current value, then the browser. */
 	#renderAdvisorModelBody(width: number, rows: number): string[] {
 		const lines: string[] = [];
+		const target = this.#advisorModelTarget ?? DEFAULT_ADVISOR_NAME;
+		const targetLabel = target === DEFAULT_ADVISOR_NAME ? "default advisor" : `${target} advisor`;
 		lines.push(
-			truncateToWidth(theme.fg("dim", ` default advisor model — current: ${this.#advisorModelDisplay()}`), width),
+			truncateToWidth(
+				theme.fg("dim", ` ${targetLabel} model — current: ${this.#advisorModelDisplay(target)}`),
+				width,
+			),
 		);
 		this.#advisorBrowser.setMaxVisible(Math.max(1, rows - 6));
 		this.#advisorBrowser.setFocused(true);
@@ -555,23 +638,8 @@ export class AdvisorAgentsPickerComponent implements Component {
 
 	async #save(): Promise<void> {
 		this.#settings.set("advisor.enabled", this.#masterEnabled);
-		const mainNames = this.#orderedRoster(MAIN_KEY);
-		this.#settings.set("advisor.agents", mainNames);
-
-		// Persist the built-in default advisor's model into the `advisor` role,
-		// in the same scope the model hub would use. The host rebuilds the live
-		// advisors in the save callback, so the role change applies immediately.
-		if (this.#stagedAdvisorModel !== undefined) {
-			if (this.#settings.get("modelRoleStorage") === "project") {
-				if (this.#stagedAdvisorModel === null) this.#settings.clearProjectModelRole("advisor");
-				else this.#settings.setProjectModelRole("advisor", this.#stagedAdvisorModel);
-			} else if (this.#stagedAdvisorModel === null) {
-				this.#settings.setModelRole("advisor", undefined);
-			} else {
-				this.#settings.setModelRole("advisor", this.#stagedAdvisorModel);
-			}
-			this.#stagedAdvisorModel = undefined;
-		}
+		const mainRoster = this.#rosterRecord(MAIN_KEY);
+		this.#settings.set("advisor.agents", mainRoster);
 
 		// Persist frontmatter for every agent whose roster changed. A shadow
 		// copy (result.shadowed) means the local definition now points at the
@@ -580,10 +648,10 @@ export class AdvisorAgentsPickerComponent implements Component {
 		for (const name of this.#dirtyAgents) {
 			const agent = this.#agentByName.get(name);
 			if (!agent) continue;
-			const ordered = this.#orderedRoster(name);
+			const roster = this.#rosterRecord(name);
 			try {
-				const result = await writeAgentAdvisors(agent, ordered, this.#userAgentsDir);
-				agent.advisors = ordered.length > 0 ? ordered : undefined;
+				const result = await writeAgentFrontmatter(agent, { advisors: roster }, this.#userAgentsDir);
+				agent.advisors = Object.keys(roster).length > 0 ? roster : undefined;
 				if (result.shadowed) {
 					agent.filePath = result.filePath;
 					agent.source = "user";
@@ -594,7 +662,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 		}
 		if (failed.length > 0) this.#cb.notify(`Failed to write advisors for: ${failed.join(", ")}`);
 
-		await this.#cb.save({ enabled: this.#masterEnabled, agents: mainNames });
+		await this.#cb.save({ enabled: this.#masterEnabled, agents: mainRoster });
 
 		this.#dirtyMain = false;
 		this.#dirtyAgents.clear();
