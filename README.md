@@ -662,3 +662,16 @@ _made for terminals that stay open_
 - [npm](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent)
 - [Discord](https://discord.gg/4NMW9cdXZa)
 - [MIT](https://github.com/can1357/oh-my-pi/blob/main/LICENSE)
+
+---
+
+## Fork workflow
+
+This repository is a personal fork of `can1357/oh-my-pi` with a rebase-heavy layout:
+
+- `main` tracks upstream (`origin/main`) and is kept up to date with it.
+- `personal` is the working branch, continuously rebased onto `main`. It mixes bug fixes that should eventually land upstream (those are also PR'd to `origin` separately) with personal features that will likely never be upstreamed.
+
+The branch is named `personal` (not `patches`) to avoid ambiguity with the tracked `patches/` directory of Bun patch files.
+
+Because `personal` is rebased regularly, the main checkout is kept clean: all work happens in git worktrees under `.worktrees/` and lands on `personal` via PR. See [AGENTS.md](AGENTS.md) for the agent-facing rules.

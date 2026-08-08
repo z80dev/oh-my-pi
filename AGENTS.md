@@ -23,6 +23,35 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
+## Repository Workflow
+
+This repo is a **personal fork** of `can1357/oh-my-pi` with a rebase-heavy branch layout:
+
+- `main` tracks upstream (`origin/main`) and is kept up to date with it.
+- `personal` (tracking `fork/personal`) is the working branch, **continuously rebased onto `main`**. It carries two kinds of changes:
+  - bug fixes intended for upstream (submit those to `origin` separately), and
+  - personal features implemented this fork's own way, which will likely never be upstreamed.
+
+The branch is deliberately named `personal` — not `patches` — because the tracked `patches/` directory (Bun patch files) shadows the name and makes plain `git log patches` ambiguous.
+
+Because `personal` is rebased regularly, **the main checkout must never be left dirty**:
+
+- ALWAYS do your work in a separate git worktree under `.worktrees/` (already gitignored), branched off `personal`:
+
+  ```sh
+  git worktree add .worktrees/<topic> -b <topic> personal
+  ```
+
+- Land changes on `personal` via PR (or merge) and clean up the worktree when done:
+
+  ```sh
+  git -C .worktrees/<topic> push fork <topic>   # open PR into fork/personal
+  git worktree remove .worktrees/<topic>
+  ```
+
+- Never commit directly to `personal` from the main checkout, and never leave uncommitted changes or scratch files there.
+- Don't rebase or rewrite `personal` yourself — the maintainer does that.
+
 ## GitHub
 
 Unless user tells you exactly what to write:
