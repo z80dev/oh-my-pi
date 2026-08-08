@@ -27,18 +27,18 @@ An advisor does not approve actions or mutate primary session state directly. It
 
 The subsystem requires `advisor.enabled: true`. Which advisors run is decided per session:
 
-- The **main session** reads `advisor.agents`, an array of agent names resolved against the discovered agent roster.
-- **Subagent sessions** read the spawned definition's `advisors:` frontmatter (a CSV or YAML list of agent names); a subagent with no declared advisors gets none.
+- The **main session** reads `advisor.agents`, a roster of advisor names (with optional per-entry model overrides) resolved against the discovered agent roster.
+- **Subagent sessions** read the spawned definition's `advisors:` frontmatter — the same roster shape; a subagent with no declared advisors gets none.
 
-Legacy fallback: a main session with `advisor.enabled: true` and an empty `advisor.agents` list still runs the default advisor, with its model resolved from `modelRoles.advisor`. Subagents have no such fallback — undeclared means none.
+Legacy fallback: a main session with `advisor.enabled: true` and an empty `advisor.agents` roster still runs the default advisor, with its model resolved from `modelRoles.advisor`. Subagents have no such fallback — undeclared means none.
 
-The reserved name `default` refers to the built-in default advisor: the baseline advisor prompt, the model resolved from `modelRoles.advisor`, and the read-only `read`/`grep`/`glob` toolset. Listing `default` in `advisor.agents` or in a definition's `advisors:` frontmatter attaches it explicitly — alongside other named advisors, and for subagents too. A definition actually named `default` takes precedence over the built-in. The legacy empty-`advisor.agents` main-session fallback is unchanged.
+The reserved name `default` refers to the built-in default advisor: the baseline advisor prompt, the model resolved from `modelRoles.advisor` (overridable per driving agent via a `default` roster entry, see below), and the read-only `read`/`grep`/`glob` toolset. Listing `default` in `advisor.agents` or in a definition's `advisors:` frontmatter attaches it explicitly — alongside other named advisors, and for subagents too. A definition actually named `default` takes precedence over the built-in. The legacy empty-`advisor.agents` main-session fallback is unchanged.
 
 Names resolve against the usual agent discovery roots: bundled agent definitions, user-level `<active agent dir>/agents` (`~/.omp/agent/agents` by default; relocated by `PI_CODING_AGENT_DIR`), project-level `.omp/agents`, and extension package roots. A name that matches no definition is skipped with a warning notice.
 
 `/advisor configure` opens a two-pane configurator. The left pane lists the global advisor-runtime master switch (the `advisor.enabled` setting, the same toggle as `/advisor on` and `/advisor off`), then the driving agents: `default` (the main session) pinned at the top, then every discovered agent definition. The right pane configures the selected agent's advisors — the built-in `default` advisor and a checkbox row for every other agent definition.
 
-Below the built-in `default` advisor row, a `default model` row sets the built-in advisor's model: it opens a searchable picker offering the built-in roles (`@fast`, `@slow`, `@tiny`, …), any custom role, and the full model catalog, persisted to `modelRoles.advisor` on "Save & apply" — an `auto` row clears the assignment back to the default `slow` chain. Selections for the main session persist to `advisor.agents`; selections for an agent definition persist to its `advisors:` frontmatter. User-level and project-level agent files are edited in place; bundled or plugin-provided definitions (which have no writable file) are shadowed by a copy written to the user agents directory, which outranks them in discovery.
+Every checked advisor entry gains a `model` row that overrides that entry's model for the selected driving agent only: it opens a searchable picker offering the built-in roles (`@fast`, `@slow`, `@tiny`, …), any custom role, and the full model catalog — an `auto` row clears the override. Named advisors keep their own definition's `model` unless overridden, so the librarian attached to two different agents can run different models; the built-in `default` advisor (which has no definition) falls back to `modelRoles.advisor` when unset. Overrides persist per driving agent: the main session's picks into `advisor.agents`, an agent definition's picks into its `advisors:` frontmatter — setting the task agent's default advisor model never changes the main session's. User-level and project-level agent files are edited in place; bundled or plugin-provided definitions (which have no writable file) are shadowed by a copy written to the user agents directory, which outranks them in discovery.
 
 Each referenced definition is wrapped in the advisor role ([`createAdvisorAgent`](../packages/coding-agent/src/session/session-advisors.ts)): its model, thinking level, tools, and body survive as the advisor's identity and specialization, while driving-agent concerns are dropped (see [The advisor role](#the-advisor-role)).
 
@@ -66,7 +66,9 @@ Any agent definition is advisor-usable; the role wrapper changes how the definit
 - **Recursion cut.** `task`, `hub`, and `yield` are stripped from the advisor's tool grant even when listed in `tools:` — an advisor is a plain agent with no session spawning, so it can never grow subagents (and therefore advisors) of its own.
 - **System prompt.** The advisor baseline, the primary's project context, the discovered `WATCHDOG.md` blocks, and the definition's body.
 
-A definition that both specializes as a reviewer and opts its subagents into advisory review:
+A driving definition's `advisors:` frontmatter is a roster: a YAML map of `name → model override` (`null` or omitted value = no override), a list of plain names, or a CSV string of names. Each override is scoped to that driving agent's sessions and wins over the advisor's own `model` — the built-in `default` entry works the same way, pinning the default advisor's model per driving agent (unset falls back to `modelRoles.advisor`). Like a named advisor's `model`, an explicit but unresolvable override reports `no_model` rather than silently running the role. The `/advisor configure` `model` rows edit these per driving agent.
+
+A definition that both specializes as a reviewer and opts its subagents into advisory review, pinning the built-in default advisor's model for its own sessions:
 
 ```markdown
 ---
@@ -76,7 +78,10 @@ model:
   - anthropic/claude-sonnet-4-5:medium
 thinking-level: high
 tools: [read, grep, glob]
-advisors: [architecture-reviewer, security-spotter]
+advisors:
+  default: "@slow"
+  architecture-reviewer: null
+  security-spotter: null
 ---
 
 Watch cross-module coupling and public-API growth.
@@ -105,7 +110,7 @@ Slash commands:
 | `/advisor status`    | Show each advisor's runtime state, model, context usage, token usage, and cost.                                                      |
 | `/advisor dump`      | Copy the compact transcript (all active advisors when a roster is present) to the clipboard.                                         |
 | `/advisor dump raw`  | Copy the full dump, including system prompt, tools, thinking, and calls.                                                             |
-| `/advisor configure` | Open a two-pane configurator: the global enable switch tops the left pane above the driving agents (`default` = the main session, then every discovered agent definition); the right pane toggles the selected agent's advisors — the built-in `default` advisor and checkbox rows for the other agent definitions — and sets the built-in advisor's model via a `default model` row (roles and models, persisted to `modelRoles.advisor`). Main-session selections persist to `advisor.agents`; per-agent selections persist to the definition's `advisors:` frontmatter. Non-TUI command hosts report that the configurator is TUI-only. |
+| `/advisor configure` | Open a two-pane configurator: the global enable switch tops the left pane above the driving agents (`default` = the main session, then every discovered agent definition); the right pane toggles the selected agent's advisors — the built-in `default` advisor and checkbox rows for the other agent definitions. Each checked entry gains a `model` row (roles and the full catalog) that overrides that advisor's model for this driving agent only; `auto` clears it. Overrides persist per driving agent: under the main session into `advisor.agents`, under an agent definition into its `advisors:` frontmatter — the built-in `default` entry is handled like any other, so its model is per driving agent too. Non-TUI command hosts report that the configurator is TUI-only. |
 
 If the subsystem is enabled but no advisor model resolves, status reports the configured advisors as inactive/`no_model`.
 
@@ -315,7 +320,7 @@ The old `advisor.subagents` setting is gone: definitions decide, and the default
 
 ## Subagents
 
-Subagents get advisors from their own definition's `advisors:` frontmatter — a CSV or YAML list of agent names resolved against the same discovered roster. A subagent whose definition declares no advisors gets none; there is no global switch anymore (the `advisor.subagents` setting was removed, and its old `false` default is the behavior for every undeclared subagent).
+Subagents get advisors from their own definition's `advisors:` frontmatter — a roster of names (each optionally carrying a model override) resolved against the same discovered roster. A subagent whose definition declares no advisors gets none; there is no global switch anymore (the `advisor.subagents` setting was removed, and its old `false` default is the behavior for every undeclared subagent).
 
 Subagent advisors remain isolated from the subagent's primary tool session in the same way the main advisor is isolated from the main agent.
 

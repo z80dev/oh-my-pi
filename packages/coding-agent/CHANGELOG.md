@@ -9,6 +9,11 @@
 - Added support for the Agent Plugins 1.0.0 standard, enabling automatic discovery, validation, and secure execution of compliant plugin packages.
 - Added the `omp share <session>` command to share saved sessions by ID prefix or file path without launching the agent.
 - Added the `AGENT=1` environment variable to child processes spawned by `coding-agent` to allow downstream tools to detect agent-driven execution.
+- Added support for the [Agent Plugins 1.0.0 standard](https://agent-plugins.org): plugin packages with a root `plugin.json` targeting the canonical schema are discovered from marketplace installs, `--plugin-dir`, and configured extension roots, with `skills/` and `mcp.json` loaded per the specification (closed-schema validation per skills-ref, `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` expansion, reserved subprocess environment, instance-keyed persistent data directories, and per-component failure isolation). Package-boundary containment is enforced before every read — including `skill://` resource access from the read tool and bash, where plugin skill files must realpath-resolve inside the plugin root.
+- Remote MCP transports now enforce header precedence and origin policy: client-generated HTTP/MCP/authorization headers win over configured headers case-insensitively, and Agent Plugins servers never forward configured headers across a redirect to a different origin (method-changing redirects of JSON-RPC POSTs are refused). Agent Plugins stdio `env` values and remote `headers` are likewise exempt from config-value resolution (no ambient env-name lookup, no `!command` execution, empty values preserved).
+- Added `omp share <session>`: share a saved session by id prefix or `.jsonl` path without launching the agent — same encrypted upload, store selection, and `share.redactSecrets` handling as the `/share` slash command.
+- Added `AGENT=1` to coding-agent child-process environments so downstream tools can detect agent-driven execution ([#7847](https://github.com/can1357/oh-my-pi/issues/7847)).
+- The built-in default advisor's model is now per driving agent: `/advisor configure` shows a `model` row under every checked advisor entry, and the built-in `default` entry's pick persists per driving agent (`advisor.agents` for the main session, `advisors:` frontmatter for an agent definition) — so setting the task agent's default advisor model no longer changes the main session's. Named advisors can also be overridden per driving agent; unset entries keep the advisor's own `model` or the `advisor` role.
 
 ### Changed
 
@@ -47,6 +52,8 @@
 ### Breaking Changes
 
 - Replaced the re-exported `zod` API with an `omptype`-backed compatibility facade (`@oh-my-pi/omptype/zod`). Plugins retain the standard Zod-style builder interface, but real Zod-specific APIs are no longer available.
+- Renamed `writeAgentAdvisors` to `writeAgentFrontmatter` in `@oh-my-pi/pi-coding-agent/task/agents`; the new signature takes a patch object (`{ advisors? }`) so one write can persist multiple keys.
+- `advisor.agents` (setting) and agent `advisors:` frontmatter are now roster records — `name → model override` (values `null` = no override) — instead of plain name lists. Legacy name lists/CSV still parse (entries without overrides) and migrate automatically on settings load.
 
 ### Added
 

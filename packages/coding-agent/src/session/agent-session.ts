@@ -176,6 +176,7 @@ import {
 	obfuscateProviderContext,
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
+import type { AdvisorRoster } from "../task/types";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -1439,7 +1440,7 @@ export class AgentSession {
 			mcpResources: config.advisorMcpResources,
 			watchdogPrompt: config.advisorWatchdogPrompt,
 			contextPrompt: config.advisorContextPrompt,
-			agentNames: config.advisorAgentNames,
+			advisorRoster: config.advisorRoster,
 			agentRoster: config.advisorAgentRoster,
 			streamFn: config.advisorStreamFn,
 			transformProviderContext: config.transformProviderContext,
@@ -8905,14 +8906,14 @@ export class AgentSession {
 
 	/**
 	 * Replace the live advisor roster (the `/advisor configure` save path).
-	 * Swaps the name list, then rebuilds the runtimes in place so the change
-	 * applies without a restart. When the advisor is disabled the new names
-	 * are simply stored for the next enable.
+	 * Swaps the roster (name → optional model override), then rebuilds the
+	 * runtimes in place so the change applies without a restart. When the
+	 * advisor is disabled the new roster is simply stored for the next enable.
 	 *
 	 * @returns the number of advisors active after the rebuild.
 	 */
-	applyAdvisorAgents(names: string[]): number {
-		return this.#advisors.applyAdvisorAgents(names);
+	applyAdvisorAgents(roster: AdvisorRoster): number {
+		return this.#advisors.applyAdvisorAgents(roster);
 	}
 
 	/**

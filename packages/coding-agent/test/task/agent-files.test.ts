@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parseAgent, writeAgentAdvisors } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { parseAgent, writeAgentFrontmatter } from "@oh-my-pi/pi-coding-agent/task/agents";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
-describe("writeAgentAdvisors", () => {
+describe("writeAgentFrontmatter", () => {
 	let tempHome: string;
 	let userAgentsDir: string;
 
@@ -37,9 +37,9 @@ describe("writeAgentAdvisors", () => {
 		].join("\n");
 		await fs.writeFile(filePath, original);
 
-		const result = await writeAgentAdvisors(
+		const result = await writeAgentFrontmatter(
 			parseAgent(filePath, original, "user"),
-			["reviewer", "librarian"],
+			{ advisors: { reviewer: null, librarian: null } },
 			userAgentsDir,
 		);
 
@@ -52,12 +52,12 @@ describe("writeAgentAdvisors", () => {
 		expect(updated).toContain("customKey: keep-me");
 
 		const reparsed = parseAgent(filePath, updated, "user");
-		expect(reparsed.advisors).toEqual(["reviewer", "librarian"]);
+		expect(reparsed.advisors).toEqual({ reviewer: null, librarian: null });
 		expect(reparsed.tools).toEqual(["read", "grep", "yield"]);
 		expect(reparsed.systemPrompt).toBe("Body line one.\nBody line two.");
 	});
 
-	test("second write with an empty advisor list removes the advisors key", async () => {
+	test("second write with an empty roster removes the advisors key", async () => {
 		const filePath = path.join(userAgentsDir, "scout.md");
 		const original = [
 			"---",
@@ -71,12 +71,37 @@ describe("writeAgentAdvisors", () => {
 		await fs.writeFile(filePath, original);
 
 		const agent = parseAgent(filePath, original, "user");
-		await writeAgentAdvisors(agent, ["librarian"], userAgentsDir);
-		await writeAgentAdvisors(agent, [], userAgentsDir);
+		await writeAgentFrontmatter(agent, { advisors: { librarian: null } }, userAgentsDir);
+		await writeAgentFrontmatter(agent, { advisors: {} }, userAgentsDir);
 
 		const updated = await fs.readFile(filePath, "utf8");
 		expect(updated).not.toContain("advisors");
 		expect(parseAgent(filePath, updated, "user").advisors).toBeUndefined();
+	});
+
+	test("writes roster model overrides alongside plain members, and a null patch clears the whole key", async () => {
+		const filePath = path.join(userAgentsDir, "scout.md");
+		const original = [
+			"---",
+			"name: scout",
+			"description: Read-only scout for repo research.",
+			"advisors:",
+			"  - reviewer",
+			"---",
+			"Scout body.",
+		].join("\n");
+		await fs.writeFile(filePath, original);
+
+		const agent = parseAgent(filePath, original, "user");
+		await writeAgentFrontmatter(agent, { advisors: { reviewer: null, default: "@slow" } }, userAgentsDir);
+
+		const withModel = parseAgent(filePath, await fs.readFile(filePath, "utf8"), "user");
+		expect(withModel.advisors).toEqual({ reviewer: null, default: "@slow" });
+
+		// A null patch clears the roster entirely.
+		await writeAgentFrontmatter(agent, { advisors: null }, userAgentsDir);
+		const cleared = parseAgent(filePath, await fs.readFile(filePath, "utf8"), "user");
+		expect(cleared.advisors).toBeUndefined();
 	});
 
 	test("shadows a bundled embedded agent into the user agents dir", async () => {
@@ -90,7 +115,7 @@ describe("writeAgentAdvisors", () => {
 			filePath: "embedded:scout.md",
 		};
 
-		const result = await writeAgentAdvisors(agent, ["reviewer"], userAgentsDir);
+		const result = await writeAgentFrontmatter(agent, { advisors: { reviewer: null } }, userAgentsDir);
 		const target = path.join(userAgentsDir, "scout.md");
 
 		expect(result.filePath).toBe(target);
@@ -98,7 +123,8 @@ describe("writeAgentAdvisors", () => {
 
 		const written = await fs.readFile(target, "utf8");
 		expect(written.endsWith("\n")).toBe(true);
-		// Frontmatter key order: name, description, tools, advisors, then remaining set fields.
+		// Frontmatter key order: name, description, tools, remaining set fields,
+		// then the patch-applied advisors key (the definition carries none).
 		const frontmatterLines = written
 			.slice(4, written.indexOf("\n---", 3))
 			.split("\n")
@@ -107,17 +133,33 @@ describe("writeAgentAdvisors", () => {
 			"name: scout",
 			"description: Read-only scout for repo research.",
 			"tools: ",
-			"advisors: ",
 			"readSummarize: false",
+			"advisors: ",
 		]);
 
 		const reparsed = parseAgent(target, written, "user");
 		expect(reparsed.name).toBe("scout");
 		expect(reparsed.description).toBe(agent.description);
 		expect(reparsed.systemPrompt).toBe(agent.systemPrompt);
-		expect(reparsed.advisors).toEqual(["reviewer"]);
+		expect(reparsed.advisors).toEqual({ reviewer: null });
 		expect(reparsed.tools).toEqual(["read", "grep", "glob", "yield"]);
 		expect(reparsed.readSummarize).toBe(false);
+	});
+
+	test("a shadowed copy carries the definition's in-memory roster when no patch touches it", async () => {
+		const agent: AgentDefinition = {
+			name: "scout",
+			description: "Read-only scout for repo research.",
+			systemPrompt: "You are a read-only scout.",
+			advisors: { default: "@slow" },
+			source: "bundled",
+			filePath: "embedded:scout.md",
+		};
+
+		const result = await writeAgentFrontmatter(agent, {}, userAgentsDir);
+		const written = await fs.readFile(result.filePath, "utf8");
+		const reparsed = parseAgent(result.filePath, written, "user");
+		expect(reparsed.advisors).toEqual({ default: "@slow" });
 	});
 
 	test("shadows a plugin-dir agent file, preserving its body and keys", async () => {
@@ -137,7 +179,11 @@ describe("writeAgentAdvisors", () => {
 		].join("\n");
 		await fs.writeFile(filePath, original);
 
-		const result = await writeAgentAdvisors(parseAgent(filePath, original, "user"), ["reviewer"], userAgentsDir);
+		const result = await writeAgentFrontmatter(
+			parseAgent(filePath, original, "user"),
+			{ advisors: { reviewer: null } },
+			userAgentsDir,
+		);
 
 		expect(result.filePath).toBe(path.join(userAgentsDir, "loom.md"));
 		expect(result.shadowed).toBe(true);
@@ -146,7 +192,7 @@ describe("writeAgentAdvisors", () => {
 		const written = await fs.readFile(result.filePath, "utf8");
 		expect(written.slice(written.indexOf("\n---", 3))).toBe(original.slice(original.indexOf("\n---", 3)));
 		const reparsed = parseAgent(result.filePath, written, "user");
-		expect(reparsed.advisors).toEqual(["reviewer"]);
+		expect(reparsed.advisors).toEqual({ reviewer: null });
 		expect(reparsed.tools).toEqual(["read", "yield"]);
 		expect(reparsed.systemPrompt).toBe("Plugin body, first line.\nPlugin body, second line.");
 	});
@@ -160,10 +206,14 @@ describe("writeAgentAdvisors", () => {
 		);
 		await fs.writeFile(filePath, original);
 
-		const result = await writeAgentAdvisors(parseAgent(filePath, original, "project"), ["scout"], userAgentsDir);
+		const result = await writeAgentFrontmatter(
+			parseAgent(filePath, original, "project"),
+			{ advisors: { scout: null } },
+			userAgentsDir,
+		);
 
 		expect(result.filePath).toBe(filePath);
 		expect(result.shadowed).toBe(false);
-		expect(parseAgent(filePath, await fs.readFile(filePath, "utf8"), "project").advisors).toEqual(["scout"]);
+		expect(parseAgent(filePath, await fs.readFile(filePath, "utf8"), "project").advisors).toEqual({ scout: null });
 	});
 });

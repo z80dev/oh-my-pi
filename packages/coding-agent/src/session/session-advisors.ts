@@ -63,7 +63,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
 	formatModelStringWithRouting,
-	resolveAdvisorRoleSelection,
+	resolveAdvisorEntryModel,
 	resolveModelOverride,
 } from "../config/model-resolver";
 import { MODEL_ROLES } from "../config/model-roles";
@@ -75,7 +75,7 @@ import { estimateToolSchemaTokens } from "../modes/utils/context-usage";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
-import type { AgentDefinition } from "../task/types";
+import type { AdvisorRoster, AgentDefinition } from "../task/types";
 import {
 	concreteThinkingLevel,
 	resolveThinkingLevelForModel,
@@ -266,12 +266,13 @@ export interface SessionAdvisorsOptions {
 	watchdogPrompt?: string;
 	contextPrompt?: string;
 	/**
-	 * Advisor names to attach: the `advisor.agents` setting for the main
-	 * session, the spawned definition's `advisors` frontmatter for subagents.
+	 * Advisor roster to attach: `name → model override` entries. The main
+	 * session reads the `advisor.agents` setting; a subagent's comes from its
+	 * definition's `advisors` frontmatter, forwarded by the task executor.
 	 * Empty/undefined on the main session falls back to the legacy default
 	 * advisor on the `advisor` role; on subagents it means no advisors.
 	 */
-	agentNames?: string[];
+	advisorRoster?: AdvisorRoster;
 	/** `discoverAgents` roster the advisor names resolve against. */
 	agentRoster?: AgentDefinition[];
 	streamFn?: StreamFn;
@@ -352,7 +353,8 @@ export class SessionAdvisors {
 	#advisorStreamFn: StreamFn | undefined;
 	#transformProviderContext: ((context: Context, model: Model) => Context | Promise<Context>) | undefined;
 	#advisors: ActiveAdvisor[] = [];
-	#advisorAgentNames: string[] | undefined;
+	/** Advisor roster (name → optional model override) attached to this session's driving agent. */
+	#advisorRoster: AdvisorRoster | undefined;
 	#advisorAgentRoster: AgentDefinition[] | undefined;
 	#advisorStatuses = new Map<string, { name: string; status: AdvisorRuntimeStatus }>();
 	#advisorProviderSessionIds = new Map<string, string>();
@@ -375,7 +377,7 @@ export class SessionAdvisors {
 		this.#advisorMcpResources = options.mcpResources;
 		this.#advisorWatchdogPrompt = options.watchdogPrompt;
 		this.#advisorContextPrompt = options.contextPrompt;
-		this.#advisorAgentNames = options.agentNames;
+		this.#advisorRoster = options.advisorRoster;
 		this.#advisorAgentRoster = options.agentRoster;
 		this.#advisorStreamFn = options.streamFn;
 		this.#transformProviderContext = options.transformProviderContext;
@@ -610,8 +612,9 @@ export class SessionAdvisors {
 	#resolveAdvisorRuntimeDescriptors(emitWarnings: boolean): AdvisorRuntimeDescriptor[] {
 		// The legacy default advisor is a main-session compatibility path only:
 		// a subagent with no advisors declared in its definition gets none.
-		const legacy = !this.#advisorAgentNames?.length && this.#host.agentKind() === "main";
-		const names = legacy ? ["default"] : (this.#advisorAgentNames ?? []);
+		const legacy =
+			(!this.#advisorRoster || Object.keys(this.#advisorRoster).length === 0) && this.#host.agentKind() === "main";
+		const names = legacy ? ["default"] : Object.keys(this.#advisorRoster ?? {});
 		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
 		for (const name of names) {
@@ -638,42 +641,39 @@ export class SessionAdvisors {
 				usedSlugs.add(slug);
 			}
 
-			// Resolve the advisor's model: the definition's `model` patterns win;
-			// else the `advisor` role chain. A model that fails to resolve skips
-			// just this advisor.
-			let model: Model | undefined;
-			let thinkingLevel: ThinkingLevel | undefined;
-			let explicitPatternLevel = false;
-			if (agent?.model?.length) {
-				const resolved = resolveModelOverride(agent.model, this.#host.modelRegistry, this.#host.settings);
-				model = resolved.model;
-				thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
-				explicitPatternLevel = resolved.explicitThinkingLevel;
-				if (!model) {
-					this.#advisorStatuses.set(slug, { name, status: "no_model" });
-					if (emitWarnings) {
+			// Resolve the advisor's model: the driving agent's override for
+			// this roster entry wins; else the definition's `model` patterns;
+			// else the `advisor` role chain. A model that fails to resolve
+			// skips just this advisor.
+			const override = legacy ? undefined : this.#advisorRoster?.[name];
+			const resolved = resolveAdvisorEntryModel({
+				override,
+				definition: agent,
+				settings: this.#host.settings,
+				modelRegistry: this.#host.modelRegistry,
+			});
+			if (!resolved) {
+				this.#advisorStatuses.set(slug, { name, status: "no_model" });
+				if (emitWarnings) {
+					if (override) {
+						this.#host.emitNotice("warning", `Advisor "${name}": no model matched "${override}"`, "advisor");
+					} else if (agent?.model?.length) {
 						this.#host.emitNotice(
 							"warning",
 							`Advisor "${name}": no model matched "${agent.model.join(", ")}"`,
 							"advisor",
 						);
-					}
-					continue;
-				}
-			} else {
-				const sel = resolveAdvisorRoleSelection(this.#host.settings, this.#host.modelRegistry.getAvailable());
-				if (!sel) {
-					this.#advisorStatuses.set(slug, { name, status: "no_model" });
-					if (emitWarnings) {
+					} else {
 						logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive", {
 							advisor: name,
 						});
 					}
-					continue;
 				}
-				model = sel.model;
-				thinkingLevel = concreteThinkingLevel(sel.thinkingLevel);
+				continue;
 			}
+			const model = resolved.model;
+			let thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
+			const explicitPatternLevel = resolved.explicitPatternLevel;
 			// The definition's own thinking level beats the role/pattern default
 			// but loses to an explicit `:level` suffix on its model pattern.
 			if (agent?.thinkingLevel !== undefined && !explicitPatternLevel) {
@@ -1650,14 +1650,14 @@ export class SessionAdvisors {
 
 	/**
 	 * Replace the live advisor roster (the `/advisor configure` save path).
-	 * Swaps the name list, then rebuilds the runtimes in place so the change
-	 * applies without a restart. When the advisor is disabled the new names
-	 * are simply stored for the next enable.
+	 * Swaps the roster (name → optional model override), then rebuilds the
+	 * runtimes in place so the change applies without a restart. When the
+	 * advisor is disabled the new roster is simply stored for the next enable.
 	 *
 	 * @returns the number of advisors active after the rebuild.
 	 */
-	applyAdvisorAgents(names: string[]): number {
-		this.#advisorAgentNames = names;
+	applyAdvisorAgents(roster: AdvisorRoster): number {
+		this.#advisorRoster = roster;
 		if (!this.#advisorEnabled) return 0;
 		this.#stopAdvisorRuntime();
 		this.#buildAdvisorRuntime(true);

@@ -167,7 +167,7 @@ import { discoverAgents } from "./task/discovery";
 import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { isScoutSpawnable } from "./task/spawn-policy";
-import type { StructuredSubagentSchemaMode } from "./task/types";
+import type { AdvisorRoster, StructuredSubagentSchemaMode } from "./task/types";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -351,12 +351,13 @@ export interface CreateAgentSessionOptions {
 	spawns?: string;
 
 	/**
-	 * Advisor names to attach, resolved against the discovered agent roster.
-	 * Subagent sessions only: the task executor forwards the spawned
-	 * definition's `advisors` frontmatter. Ignored for the main session, which
-	 * reads the `advisor.agents` setting instead.
+	 * Advisor roster to attach: `name → model override` entries, resolved
+	 * against the discovered agent roster. Subagent sessions only: the task
+	 * executor forwards the spawned definition's `advisors` frontmatter.
+	 * Ignored for the main session, which reads the `advisor.agents` setting
+	 * instead.
 	 */
-	advisorAgentNames?: string[];
+	advisorRoster?: AdvisorRoster;
 
 	/** Auth storage for credentials. Default: discoverAuthStorage(agentDir) */
 	authStorage?: AuthStorage;
@@ -3354,10 +3355,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		session = new AgentSession({
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
-			// The main session pulls its advisor list from the `advisor.agents`
-			// setting; a subagent's list comes from its own definition, forwarded
-			// by the task executor — never from the setting.
-			advisorAgentNames: agentKind === "main" ? settings.get("advisor.agents") : options.advisorAgentNames,
+			// The main session pulls its advisor roster from the `advisor.agents`
+			// setting; a subagent's comes from its own definition, forwarded by
+			// the task executor — never from the setting.
+			advisorRoster: agentKind === "main" ? settings.get("advisor.agents") : options.advisorRoster,
 			advisorAgentRoster: advisorRoster?.agents,
 			agent,
 			pruneToolDescriptions: inlineToolDescriptors,

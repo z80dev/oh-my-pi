@@ -1789,6 +1789,40 @@ export class Settings {
 		}
 		delete raw["advisor.subagents"];
 
+		// advisor.agents (name list) became a roster record (name → model
+		// override). Legacy plain-name arrays/CSV migrate to entries without
+		// overrides. Handles nested and quoted-dotted ("advisor.agents")
+		// sources; the target is always the nested form, which is the only
+		// shape the resolver reads. A nested form already in place wins over
+		// any flat leftovers.
+		const advisorAgentsObj = isRecord(raw.advisor) ? (raw.advisor as Record<string, unknown>) : undefined;
+		const nestedAgents = advisorAgentsObj?.agents;
+		const flatAgents = raw["advisor.agents"];
+		const legacyAgents =
+			Array.isArray(nestedAgents) || typeof nestedAgents === "string"
+				? nestedAgents
+				: nestedAgents === undefined && (Array.isArray(flatAgents) || typeof flatAgents === "string")
+					? flatAgents
+					: undefined;
+		if (legacyAgents !== undefined || flatAgents !== undefined) {
+			if (legacyAgents !== undefined) {
+				const roster = Object.fromEntries(
+					(Array.isArray(legacyAgents) ? legacyAgents : legacyAgents.split(","))
+						.map(entry => entry.trim())
+						.filter(Boolean)
+						.map(name => [name, null]),
+				);
+				if (!isRecord(raw.advisor)) raw.advisor = {};
+				(raw.advisor as Record<string, unknown>).agents = roster;
+			} else if (nestedAgents === undefined && isRecord(flatAgents)) {
+				// A quoted-dotted record is dead at the flat key — move it
+				// into the nested slot the resolver reads.
+				if (!isRecord(raw.advisor)) raw.advisor = {};
+				(raw.advisor as Record<string, unknown>).agents = flatAgents;
+			}
+			delete raw["advisor.agents"];
+		}
+
 		// v17 renames that used to nest under a boolean parent path:
 		//   dev.autoqa.consent -> dev.autoqaConsent
 		//   todo.reminders.max -> todo.remindersMax

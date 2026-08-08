@@ -32,7 +32,7 @@ import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import type { SecretObfuscator } from "../secrets/obfuscator";
-import type { AgentDefinition } from "../task/types";
+import type { AdvisorRoster, AgentDefinition } from "../task/types";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { XdevState } from "../tools/xdev";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
@@ -267,12 +267,13 @@ export interface AgentSessionConfig {
 	/** Project context rendered for advisor sessions. */
 	advisorContextPrompt?: string;
 	/**
-	 * Advisor names to attach: the `advisor.agents` setting for the main
-	 * session, the spawned definition's `advisors` frontmatter for subagents.
-	 * Empty/undefined on the main session falls back to the legacy default
-	 * advisor on the `advisor` role; on subagents it means no advisors.
+	 * Advisor roster to attach: `name → model override` entries. The
+	 * `advisor.agents` setting for the main session, the spawned definition's
+	 * `advisors` frontmatter for subagents. Empty/undefined on the main
+	 * session falls back to the legacy default advisor on the `advisor` role;
+	 * on subagents it means no advisors.
 	 */
-	advisorAgentNames?: string[];
+	advisorRoster?: AdvisorRoster;
 	/** `discoverAgents` roster the advisor names resolve against. */
 	advisorAgentRoster?: AgentDefinition[];
 	/** Strip tool descriptions from provider-bound side-request tool specs. */

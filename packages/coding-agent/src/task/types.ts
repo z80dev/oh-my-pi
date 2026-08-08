@@ -355,6 +355,14 @@ export interface ReviewData {
 	summary?: ReviewSummary;
 }
 
+/**
+ * One driving agent's advisor roster: advisor name → optional model
+ * selector override (`null` = no override, so the advisor's own definition
+ * `model` or the global `advisor` role applies). The reserved name `default`
+ * refers to the built-in default advisor, which has no definition of its own.
+ */
+export type AdvisorRoster = Record<string, string | null>;
+
 /** Agent definition (bundled or discovered) */
 export interface AgentDefinition {
 	name: string;
@@ -363,12 +371,12 @@ export interface AgentDefinition {
 	tools?: string[];
 	spawns?: string[] | "*";
 	/**
-	 * Names of agents from the same discovery roster that observe this agent as
-	 * advisors while it runs (the main session's equivalent is the
+	 * Advisors that observe this agent while it runs, as a roster of
+	 * `name → model override` entries (the main session's equivalent is the
 	 * `advisor.agents` setting). Any agent definition is advisor-usable; an
 	 * agent acting as an advisor never gets advisors of its own.
 	 */
-	advisors?: string[];
+	advisors?: AdvisorRoster;
 	model?: string[];
 	thinkingLevel?: ConfiguredThinkingLevel;
 	output?: unknown;

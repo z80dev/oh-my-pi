@@ -466,12 +466,13 @@ export const SETTINGS_SCHEMA = {
 				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
 		},
 	},
-	// Agent names that observe the main session as advisors. Config-file only;
-	// edited via the `/advisor configure` picker. Subagents get advisors from
-	// their definition's `advisors` frontmatter instead.
+	// Advisor roster observing the main session: name → optional model
+	// override (null = none). Config-file only; edited via the `/advisor
+	// configure` picker. Subagents get advisors from their definition's
+	// `advisors` frontmatter instead.
 	"advisor.agents": {
-		type: "array",
-		default: [] as string[],
+		type: "record",
+		default: {} as Record<string, string | null>,
 	},
 	"advisor.syncBacklog": {
 		type: "enum",

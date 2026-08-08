@@ -147,7 +147,7 @@ describe("parseAgentFields", () => {
 			advisors: ["security-advisor", "perf-reviewer"],
 		});
 
-		expect(fields?.advisors).toEqual(["security-advisor", "perf-reviewer"]);
+		expect(fields?.advisors).toEqual({ "security-advisor": null, "perf-reviewer": null });
 	});
 
 	test("parses advisors from CSV string", () => {
@@ -157,7 +157,27 @@ describe("parseAgentFields", () => {
 			advisors: "security-advisor, perf-reviewer",
 		});
 
-		expect(fields?.advisors).toEqual(["security-advisor", "perf-reviewer"]);
+		expect(fields?.advisors).toEqual({ "security-advisor": null, "perf-reviewer": null });
+	});
+
+	test("parses advisor roster overrides from a map", () => {
+		const fields = parseAgentFields({
+			name: "worker",
+			description: "desc",
+			advisors: { "security-advisor": null, default: "@slow" },
+		});
+
+		expect(fields?.advisors).toEqual({ "security-advisor": null, default: "@slow" });
+	});
+
+	test("parses single-key override objects mixed into an advisor list", () => {
+		const fields = parseAgentFields({
+			name: "worker",
+			description: "desc",
+			advisors: [{ default: "@slow" }, "perf-reviewer"],
+		});
+
+		expect(fields?.advisors).toEqual({ default: "@slow", "perf-reviewer": null });
 	});
 
 	test("returns undefined advisors when field absent", () => {
