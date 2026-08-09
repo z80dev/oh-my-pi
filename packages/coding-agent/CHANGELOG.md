@@ -38,6 +38,7 @@
 - The reserved advisor name `default` explicitly attaches the built-in default advisor (baseline prompt, `advisor`-role model, read-only tools) from `advisor.agents` or a definition's `advisors:` frontmatter, including alongside other advisors and for subagents.
 - `/advisor configure` can now set the built-in default advisor's model: a `default model` row in the right pane opens a searchable picker offering the built-in roles (`@fast`, `@slow`, …), any custom role, and the full model catalog, persisted to `modelRoles.advisor` (an `auto` row clears the assignment).
 - The built-in default advisor's model is now per driving agent: `/advisor configure` shows a `model` row under every checked advisor entry, and the built-in `default` entry's pick persists per driving agent (`advisor.agents` for the main session, `advisors:` frontmatter for an agent definition) — so setting the task agent's default advisor model no longer changes the main session's. Named advisors can also be overridden per driving agent; unset entries keep the advisor's own `model` or the `advisor` role.
+- The Agent Hub (`alt+a`) now surfaces each agent's active advisor: roster rows show an advisor chip (status glyph + name, colored by runtime status) and the detail panel lists every advisor with its status label (`off`, `quota exhausted`, `error`, `no model`).
 
 ### Changed
 
