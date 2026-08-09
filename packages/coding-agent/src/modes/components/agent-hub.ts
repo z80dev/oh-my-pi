@@ -27,6 +27,7 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import { formatAge, formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import type { AdvisorRuntimeStatus } from "../../advisor";
 import type { KeyId } from "../../config/keybindings";
 import type { Settings } from "../../config/settings";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
@@ -48,6 +49,8 @@ import {
 	STATUS_ORDER,
 } from "./agent-hub-projection";
 import {
+	advisorBadge,
+	advisorStatusLabel,
 	clampHubLine,
 	contextGauge,
 	formatChildIds,
@@ -487,6 +490,20 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 		return session ? this.#sessionMetrics.get(session)?.metrics : undefined;
 	}
 
+	/**
+	 * Advisors attached to a live session, in roster order with live runtime
+	 * status. Undefined when the agent has no session or none of its advisors
+	 * are configured/active. Optional-chaining mirrors the status line: session
+	 * doubles (test mocks) without the accessor render without advisor info.
+	 */
+	#advisorOverviewFor(ref: AgentRef): { name: string; status: AdvisorRuntimeStatus }[] | undefined {
+		const session = ref.session;
+		if (!session || typeof session.getAdvisorStatusOverview !== "function") return undefined;
+		const overview = session.getAdvisorStatusOverview();
+		if (!overview.configured || overview.advisors.length === 0) return undefined;
+		return overview.advisors;
+	}
+
 	#fallbackStatsSession(
 		ref: AgentRef,
 		observed: ObservableSession | undefined,
@@ -814,6 +831,15 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 			}
 		}
 
+		const advisors = this.#advisorOverviewFor(ref);
+		if (advisors) {
+			section("Advisor", advisors.length);
+			for (const advisor of advisors) {
+				const label = advisor.status === "running" ? "" : ` [${advisorStatusLabel(advisor.status)}]`;
+				add(`${advisorBadge(advisor.name, advisor.status)}${theme.fg("dim", label)}`);
+			}
+		}
+
 		section("Usage", 1);
 		if (metrics) {
 			addWrapped(formatMetrics(metrics), 3);
@@ -896,6 +922,8 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 		}
 		const badge = modelBadge(ref, observed);
 		if (badge) meta.push(badge);
+		const advisors = this.#advisorOverviewFor(ref);
+		if (advisors) meta.push(advisors.map(advisor => advisorBadge(advisor.name, advisor.status)).join(", "));
 		meta.push(theme.fg("dim", formatAge(Math.max(1, Math.round((Date.now() - ref.lastActivity) / 1000)))));
 		const right = meta.join(theme.sep.dot);
 

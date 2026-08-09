@@ -1,6 +1,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Ellipsis, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { AdvisorRuntimeStatus } from "../../advisor";
 import { getRoleInfo } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
 import { type AgentRef, MAIN_AGENT_ID } from "../../registry/agent-registry";
@@ -64,6 +65,40 @@ export function statusText(status: AgentRef["status"], text: string): string {
 		case "aborted":
 			return theme.fg("error", text);
 	}
+}
+
+const ADVISOR_GLYPH: Record<AdvisorRuntimeStatus, string> = {
+	running: "●",
+	paused: "○",
+	quota_exhausted: "✕",
+	error: "✕",
+	no_model: "○",
+};
+
+const ADVISOR_STATUS_LABEL: Record<AdvisorRuntimeStatus, string> = {
+	running: "running",
+	paused: "off",
+	quota_exhausted: "quota exhausted",
+	error: "error",
+	no_model: "no model",
+};
+
+/** One advisor chip for a hub row: status glyph + name, colored like `/advisor status`. */
+export function advisorBadge(name: string, status: AdvisorRuntimeStatus): string {
+	const color =
+		status === "running"
+			? "success"
+			: status === "quota_exhausted"
+				? "warning"
+				: status === "error"
+					? "error"
+					: "muted";
+	return `${theme.fg(color, ADVISOR_GLYPH[status] ?? "○")} ${sanitizeDisplayText(name)}`;
+}
+
+/** Human label for an advisor runtime status; matches `/advisor status` wording. */
+export function advisorStatusLabel(status: AdvisorRuntimeStatus): string {
+	return ADVISOR_STATUS_LABEL[status] ?? status;
 }
 
 /** Model id + thinking level (`sonnet-4-6 ◒ high`), level colored per theme. */
