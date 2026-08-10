@@ -441,4 +441,31 @@ describe("AdvisorAgentsPickerComponent", () => {
 		harness.picker.handleInput("\x1b");
 		expect(harness.closed).toBe(true);
 	});
+
+	it("esc with no staged changes closes without saving", async () => {
+		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
+		harness.picker.handleInput(DOWN); // browse the main session without staging anything
+		harness.picker.handleInput(ESC);
+		expect(harness.closed).toBe(true);
+		expect(harness.saved).toEqual([]);
+	});
+
+	it("esc auto-saves staged changes on close instead of discarding them", async () => {
+		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
+		const { picker, settings, frame, nextSave } = harness;
+
+		openDefaultModelPicker(picker);
+		for (const ch of "gpt-5.4") picker.handleInput(ch);
+		picker.handleInput(ENTER);
+		expect(frame()).toContain("model: openai/gpt-5.4");
+		expect(frame()).toContain("● unsaved");
+
+		const savePromise = nextSave();
+		picker.handleInput(ESC);
+		const sel = await savePromise;
+
+		expect(harness.closed).toBe(true);
+		expect(sel.agents).toEqual({ default: "openai/gpt-5.4" });
+		expect(settings.get("advisor.agents")).toEqual({ default: "openai/gpt-5.4" });
+	});
 });

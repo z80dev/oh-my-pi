@@ -16,7 +16,8 @@
  * switch and the main-session roster to `advisor.enabled`/`advisor.agents`,
  * writes changed agent `advisors:` frontmatter (shadow-copying into the user
  * agent dir when the original file isn't writable), and rebuilds the live
- * advisors via the host `save` callback.
+ * advisors via the host `save` callback. Closing with staged changes (Esc or
+ * the Close row) saves them first — the picker never silently discards.
  *
  * Each checked advisor entry gains a `model` row that overrides that entry's
  * model for this driving agent only — the built-in default advisor included,
@@ -317,12 +318,13 @@ export class AdvisorAgentsPickerComponent implements Component {
 		if (this.#advisorModelMode) {
 			return "↑↓ move · Enter assign · type to search · Esc back";
 		}
+		const esc = this.#dirtyMain || this.#dirtyAgents.size > 0 ? "Esc save & close" : "Esc close";
 		const base =
 			this.#focus === "left"
 				? this.#masterSelected
-					? "↑↓ move · Enter toggle · Esc close"
-					: "↑↓ move · Enter toggle/configure · → advisors · Tab switch pane · Esc close"
-				: "↑↓ move · Enter toggle · ←/Tab back · Esc close";
+					? `↑↓ move · Enter toggle · ${esc}`
+					: `↑↓ move · Enter toggle/configure · → advisors · Tab switch pane · ${esc}`
+				: `↑↓ move · Enter toggle · ←/Tab back · ${esc}`;
 		// The main session with an empty roster and the master switch on still
 		// runs the built-in default advisor at runtime — name it so the
 		// fallback isn't a surprise.
@@ -387,7 +389,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 			}
 			this.#setFocus("right");
 		};
-		list.onCancel = () => this.#cb.close();
+		list.onCancel = () => this.#requestClose();
 		return list;
 	}
 
@@ -409,7 +411,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 			void this.#onRightSelect(item.value).catch(err => {
 				this.#cb.notify(`Advisor picker: ${err instanceof Error ? err.message : String(err)}`);
 			});
-		list.onCancel = () => this.#cb.close();
+		list.onCancel = () => this.#requestClose();
 		return list;
 	}
 
@@ -469,13 +471,28 @@ export class AdvisorAgentsPickerComponent implements Component {
 		return items;
 	}
 
+	/**
+	 * Close the overlay, auto-saving staged changes first. The picker stages
+	 * roster/model edits in memory; bailing out with Esc or the Close row must
+	 * not silently drop them, so close runs the same save path as "Save &
+	 * apply" whenever anything is dirty.
+	 */
+	#requestClose(): void {
+		if (this.#dirtyMain || this.#dirtyAgents.size > 0) {
+			void this.#save().catch(err => {
+				this.#cb.notify(`Advisor picker: ${err instanceof Error ? err.message : String(err)}`);
+			});
+		}
+		this.#cb.close();
+	}
+
 	async #onRightSelect(value: string): Promise<void> {
 		if (value === SAVE_ACTION) {
 			await this.#save();
 			return;
 		}
 		if (value === CLOSE_ACTION) {
-			this.#cb.close();
+			this.#requestClose();
 			return;
 		}
 		if (value.startsWith(MODEL_ACTION_PREFIX)) {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/advisor configure` silently discarding staged roster/model changes when the picker was closed with Esc or the Close row; closing now auto-saves staged changes, and the footer shows "Esc save & close" while edits are pending.
+
 ## [17.2.12] - 2026-08-08
 
 ### Fixed
