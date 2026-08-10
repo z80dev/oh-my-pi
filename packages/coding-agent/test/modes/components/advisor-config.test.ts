@@ -500,6 +500,28 @@ describe("AdvisorAgentsPickerComponent", () => {
 		expect(settings.get("advisor.agents")).toEqual({});
 	});
 
+	it("ctrl+c inside the model picker clears the query, then backs out — never closes", async () => {
+		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
+		const { picker, frame } = harness;
+
+		picker.handleInput(DOWN); // default (main session)
+		picker.handleInput(TAB); // focus right pane
+		picker.handleInput(ENTER); // check the default advisor (staged)
+		picker.handleInput(DOWN); // model row
+		picker.handleInput(ENTER); // open the model picker
+		for (const ch of "gpt") picker.handleInput(ch);
+
+		picker.handleInput("\x03"); // clears the search query, stays in model mode
+		expect(harness.closed).toBe(false);
+		expect(frame()).toContain("default advisor model — current:");
+
+		picker.handleInput("\x03"); // backs out to the roster, overlay stays open
+		expect(harness.closed).toBe(false);
+		expect(frame()).toContain("Save & apply");
+		expect(frame()).toContain("● unsaved");
+		expect(harness.saved).toEqual([]);
+	});
+
 	it("a toggled-then-reverted roster closes without saving", async () => {
 		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
 		const { picker, settings, frame } = harness;
