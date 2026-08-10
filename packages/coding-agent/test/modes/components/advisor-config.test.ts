@@ -436,12 +436,6 @@ describe("AdvisorAgentsPickerComponent", () => {
 		expect(frame()).not.toContain("default advisor model — current:");
 	});
 
-	it("esc closes the overlay", async () => {
-		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
-		harness.picker.handleInput("\x1b");
-		expect(harness.closed).toBe(true);
-	});
-
 	it("esc with no staged changes closes without saving", async () => {
 		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
 		harness.picker.handleInput(DOWN); // browse the main session without staging anything
@@ -467,5 +461,114 @@ describe("AdvisorAgentsPickerComponent", () => {
 		expect(harness.closed).toBe(true);
 		expect(sel.agents).toEqual({ default: "openai/gpt-5.4" });
 		expect(settings.get("advisor.agents")).toEqual({ default: "openai/gpt-5.4" });
+	});
+
+	it("the Close row auto-saves staged changes", async () => {
+		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
+		const { picker, settings, nextSave } = harness;
+
+		openDefaultModelPicker(picker);
+		for (const ch of "gpt-5.4") picker.handleInput(ch);
+		picker.handleInput(ENTER);
+
+		// Rows: default, model, scout, save, close — three downs from the
+		// model row land on Close.
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN);
+		const savePromise = nextSave();
+		picker.handleInput(ENTER);
+		await savePromise;
+
+		expect(harness.closed).toBe(true);
+		expect(settings.get("advisor.agents")).toEqual({ default: "openai/gpt-5.4" });
+	});
+
+	it("ctrl+c discards staged changes on close", async () => {
+		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
+		const { picker, settings, frame } = harness;
+
+		openDefaultModelPicker(picker);
+		for (const ch of "gpt-5.4") picker.handleInput(ch);
+		picker.handleInput(ENTER);
+		expect(frame()).toContain("● unsaved");
+
+		picker.handleInput("\x03");
+
+		expect(harness.closed).toBe(true);
+		expect(harness.saved).toEqual([]);
+		expect(settings.get("advisor.agents")).toEqual({});
+	});
+
+	it("a toggled-then-reverted roster closes without saving", async () => {
+		const harness = await createPicker([bundledAgent("scout", "Fast scout")]);
+		const { picker, settings, frame } = harness;
+
+		picker.handleInput(DOWN); // default (main session)
+		picker.handleInput(TAB); // focus right pane
+		picker.handleInput(ENTER); // check the default advisor
+		expect(frame()).toContain("● unsaved");
+		picker.handleInput(ENTER); // uncheck it again — net no-op
+		expect(frame()).not.toContain("● unsaved");
+
+		picker.handleInput(ESC);
+
+		expect(harness.closed).toBe(true);
+		expect(harness.saved).toEqual([]);
+		expect(settings.get("advisor.agents")).toEqual({});
+	});
+
+	it("an edit staged while a save is in flight is persisted by a queued follow-up save", async () => {
+		const userAgentsDir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "advisor-picker-")), "agents");
+		tempDirs.push(path.dirname(userAgentsDir));
+		const settings = Settings.isolated();
+		const saved: Array<{ enabled: boolean; agents: AdvisorRoster }> = [];
+		const firstSaveEntered = Promise.withResolvers<void>();
+		const secondSaveDone = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		let closed = false;
+		const picker = new AdvisorAgentsPickerComponent(
+			{ settings, agents: [], availableModels: [SONNET_MODEL, GPT_MODEL], userAgentsDir },
+			{
+				save: sel => {
+					saved.push(sel);
+					if (saved.length === 1) firstSaveEntered.resolve();
+					if (saved.length === 2) secondSaveDone.resolve();
+					return gate.promise;
+				},
+				close: () => {
+					closed = true;
+				},
+				requestRender: () => {},
+				notify: () => {},
+			},
+		);
+
+		// Stage gpt-5.4, then activate Save & apply; the host save blocks on the gate.
+		openDefaultModelPicker(picker);
+		for (const ch of "gpt-5.4") picker.handleInput(ch);
+		picker.handleInput(ENTER);
+		picker.handleInput(DOWN); // rows: default, model, save, close → Save & apply
+		picker.handleInput(ENTER);
+		await firstSaveEntered.promise;
+
+		// While that save is in flight, stage a different model and close with Esc.
+		picker.handleInput(UP); // back to the model row
+		picker.handleInput(ENTER);
+		picker.handleInput(ESC); // the browser retains its previous query — clear it (stays in model mode)
+		for (const ch of "sonnet") picker.handleInput(ch);
+		picker.handleInput(ENTER);
+		picker.handleInput(ESC);
+		expect(closed).toBe(true);
+
+		gate.resolve();
+		await secondSaveDone.promise;
+
+		// The follow-up run must persist the newer edit, not reuse the stale run.
+		expect(saved.map(s => s.agents)).toEqual([
+			{ default: "openai/gpt-5.4" },
+			{ default: "anthropic/claude-sonnet-4-5" },
+		]);
+		expect(settings.get("advisor.agents")).toEqual({ default: "anthropic/claude-sonnet-4-5" });
 	});
 });
