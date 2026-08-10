@@ -17,7 +17,7 @@
  * writes changed agent `advisors:` frontmatter (shadow-copying into the user
  * agent dir when the original file isn't writable), and rebuilds the live
  * advisors via the host `save` callback. Closing with staged changes (Esc or
- * the Close row) saves them first — the picker never silently discards.
+ * the Close row) saves them first; Ctrl+C closes without saving.
  *
  * Each checked advisor entry gains a `model` row that overrides that entry's
  * model for this driving agent only — the built-in default advisor included,
@@ -117,6 +117,18 @@ function rosterMap(roster: AdvisorRoster | undefined, known: (name: string) => b
 }
 
 /**
+ * Shallow equality for roster records (name → model override). Used to tell
+ * real edits apart from toggled-then-reverted ones; key order is fixed by
+ * the record builder, so entry comparison is enough.
+ */
+function rosterRecordsEqual(a: AdvisorRoster, b: AdvisorRoster | undefined): boolean {
+	if (b === undefined) return Object.keys(a).length === 0;
+	const keys = Object.keys(a);
+	if (keys.length !== Object.keys(b).length) return false;
+	return keys.every(key => b[key] === a[key]);
+}
+
+/**
  * Fullscreen two-pane advisor configurator. Implements {@link Component}
  * directly (rather than extending Container) so it owns the whole frame and
  * the mouse geometry needed to make every row clickable.
@@ -144,6 +156,16 @@ export class AdvisorAgentsPickerComponent implements Component {
 	#dirtyAgents: Set<string>;
 	/** Master-switch/main-roster changes are unsaved (drives the title marker). */
 	#dirtyMain = false;
+	/**
+	 * Persisted state captured at construction and advanced after every save.
+	 * Dirty flags are recomputed against it so a toggled-then-reverted edit
+	 * counts as clean — close auto-saves, and a net-no-op "save" would still
+	 * rewrite settings and shadow-copy bundled agent definitions into the
+	 * user agents dir.
+	 */
+	#baseline = { masterEnabled: false, rosters: new Map<string, AdvisorRoster>() };
+	/** Tail of the save queue (rejection-swallowing link); new saves chain behind it. */
+	#saveInFlight: Promise<void> | undefined;
 	/** True while the right pane picks a roster entry's model. */
 	#advisorModelMode = false;
 	/** The roster entry whose model is being picked. */
@@ -190,8 +212,31 @@ export class AdvisorAgentsPickerComponent implements Component {
 			this.#rosters.set(agent.name, rosterMap(agent.advisors, known));
 		}
 		this.#dirtyAgents = new Set();
+		this.#captureBaseline();
 		this.#leftList = this.#buildLeft();
 		this.#rightList = this.#buildRight();
+	}
+
+	/** Snapshot the current master switch + roster records as the clean state. */
+	#captureBaseline(): void {
+		this.#baseline.masterEnabled = this.#masterEnabled;
+		this.#baseline.rosters.clear();
+		for (const key of this.#rosters.keys()) {
+			this.#baseline.rosters.set(key, this.#rosterRecord(key));
+		}
+	}
+
+	/** Recompute dirty flags against the baseline; call after every roster/master mutation. */
+	#refreshDirty(): void {
+		this.#dirtyMain =
+			this.#masterEnabled !== this.#baseline.masterEnabled ||
+			!rosterRecordsEqual(this.#rosterRecord(MAIN_KEY), this.#baseline.rosters.get(MAIN_KEY));
+		this.#dirtyAgents.clear();
+		for (const agent of this.#agents) {
+			if (!rosterRecordsEqual(this.#rosterRecord(agent.name), this.#baseline.rosters.get(agent.name))) {
+				this.#dirtyAgents.add(agent.name);
+			}
+		}
 	}
 
 	// ───────────────────────────── render ─────────────────────────────
@@ -233,6 +278,14 @@ export class AdvisorAgentsPickerComponent implements Component {
 	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
+			return;
+		}
+		// Ctrl+C is the picker's only discard affordance: close without
+		// saving, even with staged changes. SelectList binds both Escape and
+		// Ctrl+C to its cancel (which now auto-saves), so intercept before
+		// any delegation — including the modal model browser.
+		if (data === "\x03") {
+			this.#cb.close();
 			return;
 		}
 		if (this.#advisorModelMode) {
@@ -318,7 +371,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 		if (this.#advisorModelMode) {
 			return "↑↓ move · Enter assign · type to search · Esc back";
 		}
-		const esc = this.#dirtyMain || this.#dirtyAgents.size > 0 ? "Esc save & close" : "Esc close";
+		const esc = this.#dirtyMain || this.#dirtyAgents.size > 0 ? "Esc save & close · ^C discard" : "Esc close";
 		const base =
 			this.#focus === "left"
 				? this.#masterSelected
@@ -382,7 +435,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 		list.onSelect = item => {
 			if (item.value === ENABLED_ACTION) {
 				this.#masterEnabled = !this.#masterEnabled;
-				this.#dirtyMain = true;
+				this.#refreshDirty();
 				this.#leftList = this.#buildLeft();
 				this.#cb.requestRender();
 				return;
@@ -502,8 +555,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 		const roster = this.#currentRoster();
 		if (roster.has(value)) roster.delete(value);
 		else roster.set(value, null);
-		if (this.#selectedDriving === MAIN_KEY) this.#dirtyMain = true;
-		else this.#dirtyAgents.add(this.#selectedDriving);
+		this.#refreshDirty();
 		this.#rightList = this.#buildRight();
 		this.#cb.requestRender();
 	}
@@ -627,8 +679,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 			v === DEFAULT_MODEL_ROLE_ALIAS ? formatModelRoleAlias("default") : v;
 		if (normalize(value) !== normalize(current)) {
 			this.#currentRoster().set(target, value);
-			if (this.#selectedDriving === MAIN_KEY) this.#dirtyMain = true;
-			else this.#dirtyAgents.add(this.#selectedDriving);
+			this.#refreshDirty();
 		}
 		this.#exitAdvisorModelMode();
 	}
@@ -653,16 +704,36 @@ export class AdvisorAgentsPickerComponent implements Component {
 
 	// ───────────────────────────── save ──────────────────────────────
 
-	async #save(): Promise<void> {
-		this.#settings.set("advisor.enabled", this.#masterEnabled);
+	/**
+	 * Persist staged changes. Saves serialize rather than dedupe: an edit
+	 * staged while a save is in flight (e.g. "Save & apply", then another
+	 * model pick, then Esc) queues a follow-up run that persists the newer
+	 * state — reusing the in-flight run would silently drop it.
+	 */
+	#save(): Promise<void> {
+		const run = (this.#saveInFlight ?? Promise.resolve()).catch(() => {}).then(() => this.#doSave());
+		// The field tracks the chain tail without its caller-facing rejection:
+		// a failed run must not poison the queue for later saves.
+		this.#saveInFlight = run.catch(() => {});
+		return run;
+	}
+
+	async #doSave(): Promise<void> {
+		// Snapshot everything this run persists up front: the overlay can keep
+		// mutating rosters behind an in-flight save (Save & apply does not
+		// close the picker), and the rebaseline below must record what this
+		// run wrote — not whatever the live state drifted to mid-flight.
+		const savedMaster = this.#masterEnabled;
 		const mainRoster = this.#rosterRecord(MAIN_KEY);
+		this.#settings.set("advisor.enabled", savedMaster);
 		this.#settings.set("advisor.agents", mainRoster);
 
 		// Persist frontmatter for every agent whose roster changed. A shadow
 		// copy (result.shadowed) means the local definition now points at the
 		// written file; mutate it so reopening reflects reality.
 		const failed: string[] = [];
-		for (const name of this.#dirtyAgents) {
+		const savedRosters = new Map<string, AdvisorRoster>();
+		for (const name of [...this.#dirtyAgents]) {
 			const agent = this.#agentByName.get(name);
 			if (!agent) continue;
 			const roster = this.#rosterRecord(name);
@@ -673,16 +744,24 @@ export class AdvisorAgentsPickerComponent implements Component {
 					agent.filePath = result.filePath;
 					agent.source = "user";
 				}
+				savedRosters.set(name, roster);
 			} catch {
 				failed.push(name);
 			}
 		}
 		if (failed.length > 0) this.#cb.notify(`Failed to write advisors for: ${failed.join(", ")}`);
 
-		await this.#cb.save({ enabled: this.#masterEnabled, agents: mainRoster });
+		await this.#cb.save({ enabled: savedMaster, agents: mainRoster });
 
-		this.#dirtyMain = false;
-		this.#dirtyAgents.clear();
+		// Re-baseline what this run persisted: settings and the main roster
+		// always landed; agents whose frontmatter write failed stay dirty so
+		// the marker and the next save retry them.
+		this.#baseline.masterEnabled = savedMaster;
+		this.#baseline.rosters.set(MAIN_KEY, mainRoster);
+		for (const [name, roster] of savedRosters) {
+			this.#baseline.rosters.set(name, roster);
+		}
+		this.#refreshDirty();
 		this.#leftList = this.#buildLeft();
 		this.#rightList = this.#buildRight();
 		this.#cb.requestRender();
