@@ -47,7 +47,7 @@
 ### Fixed
 
 - Fixed `/advisor configure` showing the last driving agent's advisor checklist in the right pane while the global master switch is selected; the right pane now renders empty on the switch row, since it configures nothing per driving agent.
-- Fixed `/advisor configure` silently discarding staged roster/model changes when the picker was closed with Esc or the Close row; closing now auto-saves staged changes, and the footer shows "Esc save & close" while edits are pending.
+- Fixed `/advisor configure` silently discarding staged roster/model changes when the picker was closed with Esc or the Close row; closing now auto-saves staged changes (net no-op edits excepted), Ctrl+C closes without saving, and the footer shows "Esc save & close · ^C discard" while edits are pending.
 
 ### Removed
 

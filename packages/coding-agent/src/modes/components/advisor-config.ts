@@ -280,19 +280,20 @@ export class AdvisorAgentsPickerComponent implements Component {
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
 			return;
 		}
+		if (this.#advisorModelMode) {
+			// The model picker is modal: the browser owns every key — Ctrl+C
+			// included, where (like Esc) it clears the query or backs out to
+			// the roster rather than closing the overlay. Tab, pane switches,
+			// and roster actions are inert while picking.
+			this.#advisorBrowser.handleInput(data);
+			return;
+		}
 		// Ctrl+C is the picker's only discard affordance: close without
 		// saving, even with staged changes. SelectList binds both Escape and
 		// Ctrl+C to its cancel (which now auto-saves), so intercept before
-		// any delegation — including the modal model browser.
+		// delegating to the lists.
 		if (data === "\x03") {
 			this.#cb.close();
-			return;
-		}
-		if (this.#advisorModelMode) {
-			// The model picker is modal: the browser owns every key. Esc clears
-			// a non-empty query first, then exits via its onCancel; Tab, pane
-			// switches, and roster actions are inert while picking.
-			this.#advisorBrowser.handleInput(data);
 			return;
 		}
 		// Pane switching is intercepted before delegation: SelectList never
@@ -532,7 +533,7 @@ export class AdvisorAgentsPickerComponent implements Component {
 	 */
 	#requestClose(): void {
 		if (this.#dirtyMain || this.#dirtyAgents.size > 0) {
-			void this.#save().catch(err => {
+			void this.#save({ skipIfClean: true }).catch(err => {
 				this.#cb.notify(`Advisor picker: ${err instanceof Error ? err.message : String(err)}`);
 			});
 		}
@@ -710,8 +711,17 @@ export class AdvisorAgentsPickerComponent implements Component {
 	 * model pick, then Esc) queues a follow-up run that persists the newer
 	 * state — reusing the in-flight run would silently drop it.
 	 */
-	#save(): Promise<void> {
-		const run = (this.#saveInFlight ?? Promise.resolve()).catch(() => {}).then(() => this.#doSave());
+	#save(options?: { skipIfClean?: boolean }): Promise<void> {
+		const run = (this.#saveInFlight ?? Promise.resolve())
+			.catch(() => {})
+			.then(() => {
+				// A close-queued save re-checks dirtiness at execution time: a
+				// preceding run may already have persisted everything, and a
+				// redundant run would tear down and rebuild the live advisor
+				// runtime (via the host save callback) for nothing.
+				if (options?.skipIfClean && !this.#dirtyMain && this.#dirtyAgents.size === 0) return;
+				return this.#doSave();
+			});
 		// The field tracks the chain tail without its caller-facing rejection:
 		// a failed run must not poison the queue for later saves.
 		this.#saveInFlight = run.catch(() => {});
